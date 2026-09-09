@@ -1,0 +1,71 @@
+{
+  "name": "vscode-deploy-extension",
+  "displayName": "Deploy",
+  "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
+  "version": "0.1.1",
+  "publisher": "ofer",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "deploy.run",
+        "title": "Deploy: Run Deployment"
+      }
+    ],
+    "configuration": {
+      "title": "Deploy",
+      "properties": {
+        "deploy.workflowMapping": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Map of repository folder name to deploy workflow file name or id."
+        },
+        "deploy.pollIntervalSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "description": "Interval between run-status polls, in seconds."
+        },
+        "deploy.pinnedWorkflows": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Map of repository folder name to an ordered list of pinned workflow file names or ids, shown first in the workflow picker."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "vscode:prepublish": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest --run",
+    "package": "vsce package --allow-missing-repository --skip-license",
+    "publish-local": "node scripts/publish-local.js",
+    "release": "node scripts/release.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "fast-check": "^3.22.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
