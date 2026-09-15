@@ -5,6 +5,7 @@ import { RepoCandidate, Cancelled, CANCELLED, NoDeployableRepo } from "../core/t
 import { ProfileSelection, Profile } from "../core/profileTypes";
 import { discoverProfiles } from "../core/profileDiscovery";
 import { classifyProfile, RepoBranchInfo } from "../core/branchClassification";
+import { isGloballyExcluded } from "../core/globExclusion";
 import { GitService } from "./gitService";
 import { ProfilePicker } from "./profilePicker";
 
@@ -55,7 +56,8 @@ function autoProfile(branch: string, repos: string[]): Profile {
 export class RepoResolver {
   constructor(
     private readonly git: GitService,
-    private readonly profilePicker: ProfilePicker
+    private readonly profilePicker: ProfilePicker,
+    private readonly globalExclusions: () => string[] = () => []
   ) {}
 
   discoverRepos(): RepoCandidate[] {
@@ -69,7 +71,8 @@ export class RepoResolver {
 
   async resolve(_activeFilePath?: string): Promise<RepoPickerResult> {
     const all = this.discoverRepos();
-    const deployable = all.filter((c) => c.hasDeployWorkflow);
+    const excl = this.globalExclusions();
+    const deployable = all.filter((c) => c.hasDeployWorkflow && !isGloballyExcluded(c.name, excl));
     if (deployable.length === 0) {
       return { kind: "no-deployable-repo" };
     }

@@ -101,4 +101,5 @@ export interface DeployConfig {
   deployOrder: string[];
   hiddenProfiles: string[];
   manualProfiles: Record<string, Record<string, string>>;
+  globalExclusions: string[];
 }

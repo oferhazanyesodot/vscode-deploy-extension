@@ -42,6 +42,11 @@ export const window = {
   createQuickPick: () => createQuickPickStub(),
   withProgress: async (_opts: unknown, task: (p: unknown, t: unknown) => Promise<unknown>) =>
     task({ report() {} }, { isCancellationRequested: false, onCancellationRequested() {} }),
+  createTreeView: (_id: string, _opts: unknown) => ({
+    onDidChangeCheckboxState: (() => ({ dispose() {} })) as unknown,
+    dispose() {},
+  }),
+  registerTreeDataProvider: (_id: string, _p: unknown) => ({ dispose() {} }),
 };
 export const workspace = {
   getConfiguration: () => ({ get: () => undefined, update: async () => undefined }),
@@ -57,4 +62,28 @@ export enum StatusBarAlignment { Left = 1, Right = 2 }
 export enum ProgressLocation { Notification = 15 }
 export enum QuickPickItemKind { Separator = -1, Default = 0 }
 export enum ConfigurationTarget { Global = 1, Workspace = 2, WorkspaceFolder = 3 }
+export enum TreeItemCollapsibleState { None = 0, Collapsed = 1, Expanded = 2 }
+export enum TreeItemCheckboxState { Unchecked = 0, Checked = 1 }
+export class TreeItem {
+  label: string;
+  collapsibleState: number;
+  description?: string;
+  contextValue?: string;
+  checkboxState?: number;
+  constructor(label: string, collapsibleState = 0) {
+    this.label = label;
+    this.collapsibleState = collapsibleState;
+  }
+}
+export class EventEmitter<T> {
+  private handlers: ((e: T) => void)[] = [];
+  event = (h: (e: T) => void) => {
+    this.handlers.push(h);
+    return { dispose: () => {} };
+  };
+  fire(e: T) {
+    for (const h of this.handlers) h(e);
+  }
+  dispose() {}
+}
 export default {};

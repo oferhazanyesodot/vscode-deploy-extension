@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -20,6 +20,36 @@
       {
         "command": "profile.switch",
         "title": "Switch Profile"
+      },
+      {
+        "command": "deploy.profiles.deploy",
+        "title": "Deploy Profile",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "deploy.profiles.switch",
+        "title": "Switch Profile",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "deploy.profiles.hide",
+        "title": "Hide Profile",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "deploy.profiles.unhide",
+        "title": "Unhide Profile",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "deploy.profiles.addManual",
+        "title": "Add Manual Profile",
+        "icon": "$(add)"
+      },
+      {
+        "command": "deploy.profiles.refresh",
+        "title": "Refresh",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -87,8 +117,70 @@
             }
           },
           "description": "Manual profiles: map of profile name to a map of repository name to branch. The '+' builder updates this."
+        },
+        "deploy.globalExclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Glob patterns (supporting *) matched against repository names. Matching repos are never deployed or switched from this machine."
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deploy",
+          "title": "Deploy",
+          "icon": "resources/deploy.svg"
+        }
+      ]
+    },
+    "views": {
+      "deploy": [
+        {
+          "id": "deployProfiles",
+          "name": "Deploy Profiles"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "deploy.profiles.addManual",
+          "when": "view == deployProfiles",
+          "group": "navigation"
+        },
+        {
+          "command": "deploy.profiles.refresh",
+          "when": "view == deployProfiles",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "deploy.profiles.deploy",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "inline"
+        },
+        {
+          "command": "deploy.profiles.switch",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "inline"
+        },
+        {
+          "command": "deploy.profiles.hide",
+          "when": "view == deployProfiles && (viewItem == 'profile-live' || viewItem == 'profile-env')",
+          "group": "inline"
+        },
+        {
+          "command": "deploy.profiles.unhide",
+          "when": "view == deployProfiles && viewItem == 'profile-hidden'",
+          "group": "inline"
+        }
+      ]
     }
   },
   "scripts": {

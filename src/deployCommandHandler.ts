@@ -203,7 +203,7 @@ export class DeployCommandHandler {
 
   // Profile deploy: dispatch every candidate repo using the profile branch as ref.
   // No checkout, no working-tree mutation. Non-atomic; per-repo results recorded.
-  private async executeProfileDeploy(selection: ProfileSelection): Promise<void> {
+  async executeProfileDeploy(selection: ProfileSelection): Promise<void> {
     const d = this.deps;
     const branch = selection.name;
     const candidates = selection.candidates;

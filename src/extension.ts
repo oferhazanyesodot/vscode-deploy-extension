@@ -12,6 +12,11 @@ import { InputCollector } from "./services/inputCollector";
 import { RunTracker } from "./services/runTracker";
 import { ProfilePicker } from "./services/profilePicker";
 import { ManualProfileBuilder } from "./services/manualProfileBuilder";
+import { CheckboxStateStore } from "./services/checkboxStateStore";
+import { DeployProfilesTreeProvider, DeployTreeNode, ProfileNode } from "./services/deployProfilesTreeProvider";
+import { eligibleTargets } from "./core/eligibleTargets";
+import { classifyProfile } from "./core/branchClassification";
+import { ProfileSelection } from "./core/profileTypes";
 import { MultiRunTracker, RepoPhase, TrackedRun } from "./services/multiRunTracker";
 import { DeployEnvironment, Cancelled, CANCELLED, RunPhase, WorkflowInputDef } from "./core/types";
 import { Profile, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
@@ -219,7 +224,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const manualBuilder = new ManualProfileBuilder(git, config);
   const tempResolver = new RepoResolver(git, undefined as unknown as ProfilePicker);
   const profilePicker = new ProfilePicker(config, manualBuilder, () => tempResolver.discoverRepos().filter((r) => r.hasDeployWorkflow));
-  const repoResolver = new RepoResolver(git, profilePicker);
+  const repoResolver = new RepoResolver(git, profilePicker, () => config.globalExclusions());
   const workflowResolver = new WorkflowResolver(gh, config);
   const inputCollector = new InputCollector();
   const runTracker = new RunTracker(gh);
@@ -233,8 +238,72 @@ export function activate(context: vscode.ExtensionContext): void {
   const switchDeps = buildSwitchDeps({ git, repoResolver, notify, config, picker: profilePicker });
   const switchHandler = new SwitchProfileHandler(switchDeps);
 
+  // Capability C: Deploy Profiles tree view
+  const checkboxes = new CheckboxStateStore(context.globalState);
+  const treeProvider = new DeployProfilesTreeProvider({
+    discoverRepos: () => repoResolver.discoverRepos(),
+    listBranches: (name, root) => git.listBranches(name, root),
+    config,
+    checkboxes,
+  });
+  void treeProvider.refresh();
+  const treeView = vscode.window.createTreeView("deployProfiles", {
+    treeDataProvider: treeProvider,
+    showCollapseAll: true,
+    manageCheckboxStateManually: true,
+  } as unknown as vscode.TreeViewOptions<DeployTreeNode>);
+  const checkboxSub = (treeView as unknown as {
+    onDidChangeCheckboxState?: (h: (e: { items: ReadonlyArray<[DeployTreeNode, vscode.TreeItemCheckboxState]> }) => void) => vscode.Disposable;
+  }).onDidChangeCheckboxState?.((e) => void treeProvider.handleCheckboxChange(e.items));
+
+  const buildSelection = (node: ProfileNode): ProfileSelection | undefined => {
+    const targets = eligibleTargets(node.profile, (repo) => checkboxes.isChecked(node.profile.name, repo), config.globalExclusions());
+    if (targets.length === 0) {
+      return undefined;
+    }
+    const restricted = { ...node.profile, targets };
+    const branchInfo = new Map();
+    for (const t of targets) {
+      const info = treeProvider.branchInfoFor(t.repo);
+      if (info) branchInfo.set(t.repo, info);
+    }
+    const candidates = classifyProfile(restricted, branchInfo);
+    return { kind: "profile", name: node.profile.name, profileKind: node.profile.kind, candidates };
+  };
+
+  const cmdTreeDeploy = vscode.commands.registerCommand("deploy.profiles.deploy", async (node: ProfileNode) => {
+    const selection = buildSelection(node);
+    if (!selection) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to deploy.`); return; }
+    await handler.executeProfileDeploy(selection);
+  });
+  const cmdTreeSwitch = vscode.commands.registerCommand("deploy.profiles.switch", async (node: ProfileNode) => {
+    const targets = eligibleTargets(node.profile, (repo) => checkboxes.isChecked(node.profile.name, repo), config.globalExclusions());
+    if (targets.length === 0) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to switch.`); return; }
+    await switchHandler.runForProfile({ ...node.profile, targets });
+  });
+  const cmdTreeHide = vscode.commands.registerCommand("deploy.profiles.hide", async (node: ProfileNode) => {
+    const { toggleHidden } = await import("./core/profileGrouping");
+    await config.setHiddenProfiles(toggleHidden(config.hiddenProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
+  const cmdTreeUnhide = vscode.commands.registerCommand("deploy.profiles.unhide", async (node: ProfileNode) => {
+    const { toggleHidden } = await import("./core/profileGrouping");
+    await config.setHiddenProfiles(toggleHidden(config.hiddenProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
+  const cmdTreeAdd = vscode.commands.registerCommand("deploy.profiles.addManual", async () => {
+    await manualBuilder.run(repoResolver.discoverRepos().filter((rr) => rr.hasDeployWorkflow));
+    await treeProvider.refresh();
+  });
+  const cmdTreeRefresh = vscode.commands.registerCommand("deploy.profiles.refresh", () => treeProvider.refresh());
+
   const deployCommand = vscode.commands.registerCommand("deploy.run", () => handler.execute());
-  const switchCommand = vscode.commands.registerCommand("profile.switch", () => switchHandler.execute());
+  const switchCommand = vscode.commands.registerCommand("profile.switch", async () => {
+    // Focus the stable Deploy Profiles tree (the robust surface) rather than the
+    // fragile QuickPick that could be dismissed by focus loss.
+    await vscode.commands.executeCommand("deployProfiles.focus");
+    void vscode.window.showInformationMessage("Use the Deploy Profiles panel: expand a profile and click Switch.");
+  });
 
   const deployStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   deployStatus.text = "$(rocket) Deploy";
@@ -248,7 +317,8 @@ export function activate(context: vscode.ExtensionContext): void {
   switchStatus.command = "profile.switch";
   switchStatus.show();
 
-  context.subscriptions.push(deployCommand, switchCommand, deployStatus, switchStatus);
+  context.subscriptions.push(deployCommand, switchCommand, deployStatus, switchStatus, treeView, cmdTreeDeploy, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh);
+  if (checkboxSub) { context.subscriptions.push(checkboxSub); }
 }
 
 export function deactivate(): void {

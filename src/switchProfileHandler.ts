@@ -36,6 +36,12 @@ function autoProfile(branch: string, repos: string[]): Profile {
 export class SwitchProfileHandler {
   constructor(private readonly deps: SwitchProfileDeps) {}
 
+  // Public entry point used by the tree Switch action: run the switch for an explicit
+  // profile (already restricted to eligible targets), bypassing the picker.
+  async runForProfile(profile: Profile): Promise<void> {
+    await this.runProfile(profile);
+  }
+
   async execute(): Promise<void> {
     const d = this.deps;
 
@@ -58,6 +64,19 @@ export class SwitchProfileHandler {
       return;
     }
     const profile = chosen as Profile;
+    await this.runProfile(profile, branchInfo);
+  }
+
+  private async runProfile(profile: Profile, providedBranchInfo?: Map<string, RepoBranchInfo>): Promise<void> {
+    const d = this.deps;
+    let branchInfo = providedBranchInfo;
+    if (!branchInfo) {
+      branchInfo = new Map();
+      for (const repo of d.discoverRepos().filter((r) => r.hasDeployWorkflow)) {
+        const b = await d.listBranches(repo.name, repo.rootPath);
+        branchInfo.set(repo.name, { rootPath: repo.rootPath, local: new Set(b.local), remote: new Set(b.remote) });
+      }
+    }
 
     const candidates = classifyProfile(profile, branchInfo);
     if (candidates.length === 0) {

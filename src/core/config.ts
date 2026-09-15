@@ -22,6 +22,7 @@ export function normalizeConfig(raw: {
   deployOrder?: unknown;
   hiddenProfiles?: unknown;
   manualProfiles?: unknown;
+  globalExclusions?: unknown;
 }): DeployConfig {
   const mapping: Record<string, string> = {};
   if (raw.workflowMapping && typeof raw.workflowMapping === "object") {
@@ -74,5 +75,8 @@ export function normalizeConfig(raw: {
     deployOrder,
     hiddenProfiles,
     manualProfiles,
+    globalExclusions: Array.isArray(raw.globalExclusions)
+      ? raw.globalExclusions.filter((x): x is string => typeof x === "string")
+      : [],
   };
 }

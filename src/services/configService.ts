@@ -13,6 +13,7 @@ export class ConfigService {
       deployOrder: cfg.get("deployOrder"),
       hiddenProfiles: cfg.get("hiddenProfiles"),
       manualProfiles: cfg.get("manualProfiles"),
+      globalExclusions: cfg.get("globalExclusions"),
     });
   }
 
@@ -39,6 +40,10 @@ export class ConfigService {
 
   manualProfiles(): Record<string, Record<string, string>> {
     return this.get().manualProfiles;
+  }
+
+  globalExclusions(): string[] {
+    return this.get().globalExclusions;
   }
 
   private target(): vscode.ConfigurationTarget {
