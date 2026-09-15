@@ -11,21 +11,33 @@ import {
   NoWorkflowFound,
   isCancelled,
 } from "./core/types";
+import {
+  ProfileSelection,
+  CandidateRepo,
+  PerRepositoryResult,
+  DispatchOutcome,
+} from "./core/profileTypes";
 import { gateFor } from "./core/gating";
 import { isDirty } from "./core/gitStatus";
 import { parseInputs, additionalInputs } from "./core/workflowInputs";
+import { orderRepos } from "./core/deployOrder";
+import { buildDeploymentSummary } from "./core/summaries";
+import { RepoPhase, TrackedRun } from "./services/multiRunTracker";
+
+export type ResolveResult = RepoCandidate | ProfileSelection | Cancelled | NoDeployableRepo;
 
 // Collaborator interfaces (implemented by the vscode-backed services).
 export interface Deps {
   ghIsInstalled(): Promise<boolean>;
   ghIsAuthenticated(repoRoot: string): Promise<boolean>;
-  resolveRepo(activeFilePath?: string): Promise<RepoCandidate | Cancelled | NoDeployableRepo>;
+  resolveRepo(activeFilePath?: string): Promise<ResolveResult>;
   resolveWorkflow(repo: RepoCandidate): Promise<WorkflowSummary | string | Cancelled | NoWorkflowFound>;
   pickEnvironment(): Promise<DeployEnvironment | Cancelled>;
   gitStatus(repoRoot: string): Promise<{ staged: boolean; unstaged: boolean; untracked: boolean }>;
   currentBranch(repoRoot: string): Promise<string>;
   confirmDirty(): Promise<boolean>;
   confirmPreprod(): Promise<boolean>;
+  confirmPreprodProfile(branch: string, repos: string[]): Promise<boolean>;
   viewWorkflowYaml(repoRoot: string, workflow: string): Promise<string>;
   collectInputs(defs: WorkflowInputDef[]): Promise<Record<string, string> | Cancelled>;
   runWorkflow(
@@ -45,6 +57,11 @@ export interface Deps {
     runId: string,
     onPhase: (phase: RunPhase) => void
   ): Promise<RunView | undefined>; // progress handled inside the adapter
+  trackMany(
+    runs: TrackedRun[],
+    onUpdate: (phases: RepoPhase[]) => void
+  ): Promise<RepoPhase[]>;
+  deployOrder(): string[];
   activeFilePath(): string | undefined;
   // Notifications
   notifyError(message: string): void;
@@ -52,13 +69,13 @@ export interface Deps {
   notifyFailure(repo: string, env: string, runUrl: string): void;
   notifyCancelled(repo: string, env: string): void;
   notifyInfo(message: string): void;
+  deploymentSummary(branch: string, env: DeployEnvironment, results: PerRepositoryResult[]): void;
 }
 
 function workflowDisplayName(w: WorkflowSummary | string): string {
   return typeof w === "string" ? w : w.name;
 }
 function workflowRef(w: WorkflowSummary | string): string {
-  // For dispatch we pass the workflow file name/id; a WorkflowSummary uses its path basename or id.
   if (typeof w === "string") {
     return w;
   }
@@ -77,24 +94,33 @@ export class DeployCommandHandler {
       return;
     }
 
-    // 2. Resolve repo (Req 2)
-    const repo = await d.resolveRepo(d.activeFilePath());
-    if (isCancelled(repo)) {
+    // 2. Resolve repo OR profile (Req 2, 7)
+    const resolved = await d.resolveRepo(d.activeFilePath());
+    if (isCancelled(resolved)) {
       return;
     }
-    if ((repo as NoDeployableRepo).kind === "no-deployable-repo") {
+    if ((resolved as NoDeployableRepo).kind === "no-deployable-repo") {
       d.notifyError("No deployable repository was found in the workspace.");
       return;
     }
-    const targetRepo = repo as RepoCandidate;
+    if ((resolved as ProfileSelection).kind === "profile") {
+      await this.executeProfileDeploy(resolved as ProfileSelection);
+      return;
+    }
 
-    // Auth is checked against the target repo host (Req 11.3)
+    const targetRepo = resolved as RepoCandidate;
+    await this.executeSingle(targetRepo);
+  }
+
+  // Existing single-repo flow (unchanged behavior).
+  private async executeSingle(targetRepo: RepoCandidate): Promise<void> {
+    const d = this.deps;
+
     if (!(await d.ghIsAuthenticated(targetRepo.rootPath))) {
       d.notifyError("GitHub CLI is not authenticated. Run `gh auth login` and try again.");
       return;
     }
 
-    // 3. Resolve workflow (Req 3)
     const workflow = await d.resolveWorkflow(targetRepo);
     if (isCancelled(workflow)) {
       return;
@@ -105,14 +131,12 @@ export class DeployCommandHandler {
     }
     const wf = workflow as WorkflowSummary | string;
 
-    // 4. Select environment (Req 4)
     const env = await d.pickEnvironment();
     if (isCancelled(env)) {
       return;
     }
     const environment = env as DeployEnvironment;
 
-    // 5. Dirty tree check (Req 5)
     const status = await d.gitStatus(targetRepo.rootPath);
     if (isDirty(status)) {
       const proceed = await d.confirmDirty();
@@ -121,7 +145,6 @@ export class DeployCommandHandler {
       }
     }
 
-    // 6. Environment gate (Req 6)
     const gate = gateFor(environment);
     if (gate.kind === "confirm") {
       const proceed = await d.confirmPreprod();
@@ -129,9 +152,7 @@ export class DeployCommandHandler {
         return;
       }
     }
-    // gate.kind === "protected" (prod): dispatch and rely on GitHub Environments. No local approval.
 
-    // 7. Collect additional inputs (Req 7)
     const yaml = await d.viewWorkflowYaml(targetRepo.rootPath, workflowRef(wf));
     const defs = yaml ? parseInputs(yaml) : [];
     const extras = additionalInputs(defs);
@@ -144,7 +165,6 @@ export class DeployCommandHandler {
       collected = result as Record<string, string>;
     }
 
-    // 8. Dispatch (Req 8)
     const branch = await d.currentBranch(targetRepo.rootPath);
     const fields: Record<string, string> = { "deployment-environment": environment, ...collected };
     const dispatchedAt = new Date();
@@ -154,7 +174,6 @@ export class DeployCommandHandler {
       return;
     }
 
-    // 9. Identify + track (Req 9)
     const wfName = workflowDisplayName(wf);
     const run = await d.identifyRun(targetRepo.rootPath, wfName, branch, dispatchedAt);
     if (!run) {
@@ -166,7 +185,6 @@ export class DeployCommandHandler {
 
     const finalView = await d.track(targetRepo.rootPath, run.databaseId, () => {});
 
-    // 10. Notify (Req 10)
     const url = finalView?.url ?? run.url;
     if (!finalView) {
       d.notifyInfo(`Tracking ended for ${targetRepo.name} (${environment}). View run: ${url}`);
@@ -180,5 +198,117 @@ export class DeployCommandHandler {
     } else {
       d.notifyFailure(targetRepo.name, environment, url);
     }
+  }
+
+  // Profile deploy: dispatch every candidate repo using the profile branch as ref.
+  // No checkout, no working-tree mutation. Non-atomic; per-repo results recorded.
+  private async executeProfileDeploy(selection: ProfileSelection): Promise<void> {
+    const d = this.deps;
+    const branch = selection.branch;
+    const candidates = selection.candidates;
+
+    if (candidates.length === 0) {
+      d.notifyError(`No repository contains the profile branch ${branch}.`);
+      return;
+    }
+
+    // Auth check against the first candidate host (same host in practice).
+    if (!(await d.ghIsAuthenticated(candidates[0].rootPath))) {
+      d.notifyError("GitHub CLI is not authenticated. Run `gh auth login` and try again.");
+      return;
+    }
+
+    // Single environment for all (Req 11).
+    const env = await d.pickEnvironment();
+    if (isCancelled(env)) {
+      return;
+    }
+    const environment = env as DeployEnvironment;
+
+    // Gating (Req 12).
+    const gate = gateFor(environment);
+    if (gate.kind === "confirm") {
+      const proceed = await d.confirmPreprodProfile(branch, candidates.map((c) => c.name));
+      if (!proceed) {
+        return;
+      }
+    }
+
+    // Order the candidates (Req 14.1).
+    const ordered = orderRepos(candidates, d.deployOrder());
+
+    const results: PerRepositoryResult[] = [];
+    const tracked: TrackedRun[] = [];
+    const dispatchedAt = new Date();
+
+    for (const repo of ordered) {
+      const result = await this.dispatchOne(repo, branch, environment);
+      results.push(result.result);
+      if (result.tracked) {
+        tracked.push(result.tracked);
+      }
+    }
+
+    // Track all identified runs together (Req 15), then record conclusions.
+    if (tracked.length > 0) {
+      const phases = await d.trackMany(tracked, () => {});
+      for (const phase of phases) {
+        const res = results.find((r) => r.repoName === phase.repoName);
+        if (res && phase.phase.kind === "completed") {
+          res.runConclusion = phase.phase.conclusion;
+          res.runUrl = phase.runUrl ?? res.runUrl;
+        }
+      }
+    }
+
+    // Summary (Req 16).
+    d.deploymentSummary(branch, environment, results);
+    void buildDeploymentSummary(branch, environment, results);
+  }
+
+  private async dispatchOne(
+    repo: CandidateRepo,
+    branch: string,
+    environment: DeployEnvironment
+  ): Promise<{ result: PerRepositoryResult; tracked?: TrackedRun }> {
+    const d = this.deps;
+
+    // Resolve workflow (Req 13).
+    const workflow = await d.resolveWorkflow({
+      name: repo.name,
+      rootPath: repo.rootPath,
+      hasDeployWorkflow: true,
+    });
+    if (isCancelled(workflow) || (typeof workflow !== "string" && (workflow as NoWorkflowFound).kind === "no-workflow-found")) {
+      const outcome: DispatchOutcome = { kind: "resolution-failed" };
+      return { result: { repoName: repo.name, environment, dispatch: outcome } };
+    }
+    const wf = workflow as WorkflowSummary | string;
+
+    // Dispatch using the profile branch as ref (Branch_As_Ref, no checkout).
+    const dispatchedAt = new Date();
+    const runResult = await d.runWorkflow(repo.rootPath, workflowRef(wf), branch, {
+      "deployment-environment": environment,
+    });
+    if (runResult.code !== 0) {
+      const outcome: DispatchOutcome = { kind: "dispatch-failed", error: runResult.stderr || runResult.stdout };
+      return {
+        result: { repoName: repo.name, environment, workflow: workflowDisplayName(wf), dispatch: outcome },
+      };
+    }
+
+    const run = await d.identifyRun(repo.rootPath, workflowDisplayName(wf), branch, dispatchedAt);
+    const outcome: DispatchOutcome = { kind: "dispatched", runId: run?.databaseId, runUrl: run?.url };
+    const result: PerRepositoryResult = {
+      repoName: repo.name,
+      environment,
+      workflow: workflowDisplayName(wf),
+      dispatch: outcome,
+      runUrl: run?.url,
+    };
+    if (run) {
+      return { result, tracked: { repoName: repo.name, runId: run.databaseId, repoRoot: repo.rootPath, runUrl: run.url } };
+    }
+    return { result };
   }
 }

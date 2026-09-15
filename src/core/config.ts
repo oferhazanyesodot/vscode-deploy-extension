@@ -12,10 +12,14 @@ export function clampInterval(value: unknown): number {
 }
 
 // Pure: normalize a raw settings object into a DeployConfig.
+const DIRTY_DEFAULTS = ["stash", "skip", "abort", "prompt"] as const;
+
 export function normalizeConfig(raw: {
   workflowMapping?: unknown;
   pollIntervalSeconds?: unknown;
   pinnedWorkflows?: unknown;
+  dirtyHandlingDefault?: unknown;
+  deployOrder?: unknown;
 }): DeployConfig {
   const mapping: Record<string, string> = {};
   if (raw.workflowMapping && typeof raw.workflowMapping === "object") {
@@ -33,9 +37,19 @@ export function normalizeConfig(raw: {
       }
     }
   }
+  const dirty = DIRTY_DEFAULTS.includes(raw.dirtyHandlingDefault as (typeof DIRTY_DEFAULTS)[number])
+    ? (raw.dirtyHandlingDefault as DeployConfig["dirtyHandlingDefault"])
+    : "prompt";
+
+  const deployOrder = Array.isArray(raw.deployOrder)
+    ? raw.deployOrder.filter((x): x is string => typeof x === "string")
+    : [];
+
   return {
     workflowMapping: mapping,
     pollIntervalSeconds: clampInterval(raw.pollIntervalSeconds),
     pinnedWorkflows: pinned,
+    dirtyHandlingDefault: dirty,
+    deployOrder,
   };
 }

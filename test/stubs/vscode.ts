@@ -6,6 +6,7 @@ export const window = {
   showQuickPick: async () => undefined,
   showInputBox: async () => undefined,
   createStatusBarItem: () => ({ show() {}, dispose() {}, text: "", command: "" }),
+  createOutputChannel: () => ({ appendLine() {}, append() {}, show() {}, dispose() {}, clear() {} }),
   withProgress: async (_opts: unknown, task: (p: unknown, t: unknown) => Promise<unknown>) =>
     task({ report() {} }, { isCancellationRequested: false, onCancellationRequested() {} }),
 };

@@ -91,8 +91,12 @@ export interface ProcessResult {
 }
 
 // --- Config ---
+export type DirtyHandlingDefaultConfig = "stash" | "skip" | "abort" | "prompt";
+
 export interface DeployConfig {
   workflowMapping: Record<string, string>;
   pollIntervalSeconds: number;
   pinnedWorkflows: Record<string, string[]>;
+  dirtyHandlingDefault: DirtyHandlingDefaultConfig;
+  deployOrder: string[];
 }

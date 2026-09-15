@@ -8,6 +8,9 @@ export class ConfigService {
     return normalizeConfig({
       workflowMapping: cfg.get("workflowMapping"),
       pollIntervalSeconds: cfg.get("pollIntervalSeconds"),
+      pinnedWorkflows: cfg.get("pinnedWorkflows"),
+      dirtyHandlingDefault: cfg.get("dirtyHandlingDefault"),
+      deployOrder: cfg.get("deployOrder"),
     });
   }
 
@@ -18,5 +21,13 @@ export class ConfigService {
 
   pinnedWorkflows(repoName: string): string[] {
     return this.get().pinnedWorkflows[repoName] ?? [];
+  }
+
+  dirtyHandlingDefault(): DeployConfig["dirtyHandlingDefault"] {
+    return this.get().dirtyHandlingDefault;
+  }
+
+  deployOrder(): string[] {
+    return this.get().deployOrder;
   }
 }
