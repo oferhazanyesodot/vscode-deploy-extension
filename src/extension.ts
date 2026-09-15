@@ -46,6 +46,7 @@ function buildDeps(services: {
     ghIsAuthenticated: (root) => gh.isAuthenticated(root),
     resolveRepo: (active) => repoResolver.resolve(active),
     resolveWorkflow: (repo) => workflowResolver.resolve(repo),
+    resolveWorkflowNonInteractive: (repo) => workflowResolver.resolveNonInteractive(repo),
     pickEnvironment,
     gitStatus: (root) => git.status(root),
     currentBranch: (root) => git.currentBranch(root),

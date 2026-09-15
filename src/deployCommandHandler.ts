@@ -32,6 +32,7 @@ export interface Deps {
   ghIsAuthenticated(repoRoot: string): Promise<boolean>;
   resolveRepo(activeFilePath?: string): Promise<ResolveResult>;
   resolveWorkflow(repo: RepoCandidate): Promise<WorkflowSummary | string | Cancelled | NoWorkflowFound>;
+  resolveWorkflowNonInteractive(repo: RepoCandidate): Promise<WorkflowSummary | string | NoWorkflowFound>;
   pickEnvironment(): Promise<DeployEnvironment | Cancelled>;
   gitStatus(repoRoot: string): Promise<{ staged: boolean; unstaged: boolean; untracked: boolean }>;
   currentBranch(repoRoot: string): Promise<string>;
@@ -273,13 +274,13 @@ export class DeployCommandHandler {
   ): Promise<{ result: PerRepositoryResult; tracked?: TrackedRun }> {
     const d = this.deps;
 
-    // Resolve workflow (Req 13).
-    const workflow = await d.resolveWorkflow({
+    // Resolve workflow non-interactively (Req 13) — no mid-batch pickers.
+    const workflow = await d.resolveWorkflowNonInteractive({
       name: repo.name,
       rootPath: repo.rootPath,
       hasDeployWorkflow: true,
     });
-    if (isCancelled(workflow) || (typeof workflow !== "string" && (workflow as NoWorkflowFound).kind === "no-workflow-found")) {
+    if (typeof workflow !== "string" && (workflow as NoWorkflowFound).kind === "no-workflow-found") {
       const outcome: DispatchOutcome = { kind: "resolution-failed" };
       return { result: { repoName: repo.name, branch: repo.branch, environment, dispatch: outcome } };
     }

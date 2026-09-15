@@ -23,6 +23,7 @@ function baseDeps(overrides: Partial<Deps> = {}): Deps {
     ghIsAuthenticated: vi.fn(async () => true),
     resolveRepo: vi.fn(async () => repo),
     resolveWorkflow: vi.fn(async () => "deploy.yaml"),
+    resolveWorkflowNonInteractive: vi.fn(async () => "deploy.yaml"),
     pickEnvironment: vi.fn(async () => "dev" as DeployEnvironment),
     gitStatus: vi.fn(async () => ({ staged: false, unstaged: false, untracked: false })),
     currentBranch: vi.fn(async () => "fix/x"),

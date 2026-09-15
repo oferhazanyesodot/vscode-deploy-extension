@@ -10,6 +10,7 @@ function baseDeps(over: Partial<Deps> = {}): Deps {
     ghIsAuthenticated: vi.fn(async () => true),
     resolveRepo: vi.fn(async () => ({ kind: "cancelled" as const })),
     resolveWorkflow: vi.fn(async () => "deploy.yaml"),
+    resolveWorkflowNonInteractive: vi.fn(async () => "deploy.yaml"),
     pickEnvironment: vi.fn(async () => "dev" as DeployEnvironment),
     gitStatus: vi.fn(async () => ({ staged: false, unstaged: false, untracked: false })),
     currentBranch: vi.fn(async () => "main"),
@@ -119,6 +120,7 @@ describe("profile deploy", () => {
     const d = baseDeps({
       resolveRepo: vi.fn(async () => profile([cand("a"), cand("b")])),
       resolveWorkflow: vi.fn(async (repo) => (repo.name === "a" ? { kind: "no-workflow-found" as const, repo: "a" } : "deploy.yaml")),
+      resolveWorkflowNonInteractive: vi.fn(async (repo) => (repo.name === "a" ? { kind: "no-workflow-found" as const, repo: "a" } : "deploy.yaml")),
       trackMany: vi.fn(async () => []),
     });
     let captured: PerRepositoryResult[] = [];

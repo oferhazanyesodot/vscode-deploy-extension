@@ -52,4 +52,25 @@ export class WorkflowResolver {
     }
     return picked.workflow;
   }
+
+  // Non-interactive resolution for batch/profile deploy: never prompts.
+  // mapping -> mapped; single discovered -> it; multiple -> pinned-first, else first.
+  async resolveNonInteractive(
+    repo: RepoCandidate
+  ): Promise<WorkflowSummary | string | NoWorkflowFound> {
+    const mapped = this.config.mappedWorkflow(repo.name);
+    if (mapped) {
+      return mapped;
+    }
+    const discovered = await this.gh.listWorkflows(repo.rootPath);
+    if (discovered.length === 0) {
+      return { kind: "no-workflow-found", repo: repo.name };
+    }
+    if (discovered.length === 1) {
+      return discovered[0];
+    }
+    const pinned = this.config.pinnedWorkflows(repo.name);
+    const ordered = orderByPinned(discovered, pinned);
+    return ordered[0];
+  }
 }
