@@ -35,10 +35,10 @@ function baseDeps(over: Partial<Deps> = {}): Deps {
 }
 
 function profile(candidates: CandidateRepo[]): ProfileSelection {
-  return { kind: "profile", branch: "fix/x", candidates };
+  return { kind: "profile", name: "fix/x", profileKind: "auto", candidates };
 }
 
-const cand = (name: string): CandidateRepo => ({ name, rootPath: `C:/r/${name}`, location: "both" });
+const cand = (name: string): CandidateRepo => ({ name, rootPath: `C:/r/${name}`, branch: "fix/x", location: "both" });
 
 describe("profile deploy", () => {
   it("dispatches every candidate using the profile branch as ref (no checkout)", async () => {

@@ -1,4 +1,36 @@
 // Minimal vscode stub for unit tests run in Node (no VS Code host).
+
+function makeEmitter<T>() {
+  const handlers: ((e: T) => void)[] = [];
+  const event = (h: (e: T) => void) => {
+    handlers.push(h);
+    return { dispose() {} };
+  };
+  (event as unknown as { fire: (e: T) => void }).fire = (e: T) => {
+    for (const h of handlers) h(e);
+  };
+  return event as ((h: (e: T) => void) => { dispose(): void }) & { fire: (e: T) => void };
+}
+
+export function createQuickPickStub<T = unknown>() {
+  return {
+    title: "",
+    placeholder: "",
+    value: "",
+    items: [] as T[],
+    activeItems: [] as T[],
+    selectedItems: [] as T[],
+    buttons: [] as unknown[],
+    onDidTriggerItemButton: makeEmitter<{ item: T; button: unknown }>(),
+    onDidTriggerButton: makeEmitter<unknown>(),
+    onDidAccept: makeEmitter<void>(),
+    onDidHide: makeEmitter<void>(),
+    show() {},
+    hide() {},
+    dispose() {},
+  };
+}
+
 export const window = {
   showInformationMessage: async () => undefined,
   showWarningMessage: async () => undefined,
@@ -7,17 +39,22 @@ export const window = {
   showInputBox: async () => undefined,
   createStatusBarItem: () => ({ show() {}, dispose() {}, text: "", command: "" }),
   createOutputChannel: () => ({ appendLine() {}, append() {}, show() {}, dispose() {}, clear() {} }),
+  createQuickPick: () => createQuickPickStub(),
   withProgress: async (_opts: unknown, task: (p: unknown, t: unknown) => Promise<unknown>) =>
     task({ report() {} }, { isCancellationRequested: false, onCancellationRequested() {} }),
 };
 export const workspace = {
-  getConfiguration: () => ({ get: () => undefined }),
+  getConfiguration: () => ({ get: () => undefined, update: async () => undefined }),
   workspaceFolders: [] as unknown[],
 };
 export const commands = { registerCommand: () => ({ dispose() {} }) };
 export const env = { openExternal: async () => true };
 export const Uri = { parse: (s: string) => ({ toString: () => s }) };
+export class ThemeIcon {
+  constructor(public readonly id: string) {}
+}
 export enum StatusBarAlignment { Left = 1, Right = 2 }
 export enum ProgressLocation { Notification = 15 }
 export enum QuickPickItemKind { Separator = -1, Default = 0 }
+export enum ConfigurationTarget { Global = 1, Workspace = 2, WorkspaceFolder = 3 }
 export default {};

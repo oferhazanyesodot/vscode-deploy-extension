@@ -99,4 +99,6 @@ export interface DeployConfig {
   pinnedWorkflows: Record<string, string[]>;
   dirtyHandlingDefault: DirtyHandlingDefaultConfig;
   deployOrder: string[];
+  hiddenProfiles: string[];
+  manualProfiles: Record<string, Record<string, string>>;
 }

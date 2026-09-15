@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -68,6 +68,25 @@
           },
           "default": [],
           "description": "Ordered list of repository names controlling Profile Deploy dispatch order. Unknown names are ignored; unlisted repositories follow in discovery order."
+        },
+        "deploy.hiddenProfiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Profile names to hide from both pickers. The eye toggle updates this. A name matching no profile is ignored."
+        },
+        "deploy.manualProfiles": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "description": "Manual profiles: map of profile name to a map of repository name to branch. The '+' builder updates this."
         }
       }
     }

@@ -204,7 +204,7 @@ export class DeployCommandHandler {
   // No checkout, no working-tree mutation. Non-atomic; per-repo results recorded.
   private async executeProfileDeploy(selection: ProfileSelection): Promise<void> {
     const d = this.deps;
-    const branch = selection.branch;
+    const branch = selection.name;
     const candidates = selection.candidates;
 
     if (candidates.length === 0) {
@@ -281,26 +281,27 @@ export class DeployCommandHandler {
     });
     if (isCancelled(workflow) || (typeof workflow !== "string" && (workflow as NoWorkflowFound).kind === "no-workflow-found")) {
       const outcome: DispatchOutcome = { kind: "resolution-failed" };
-      return { result: { repoName: repo.name, environment, dispatch: outcome } };
+      return { result: { repoName: repo.name, branch: repo.branch, environment, dispatch: outcome } };
     }
     const wf = workflow as WorkflowSummary | string;
 
     // Dispatch using the profile branch as ref (Branch_As_Ref, no checkout).
     const dispatchedAt = new Date();
-    const runResult = await d.runWorkflow(repo.rootPath, workflowRef(wf), branch, {
+    const runResult = await d.runWorkflow(repo.rootPath, workflowRef(wf), repo.branch, {
       "deployment-environment": environment,
     });
     if (runResult.code !== 0) {
       const outcome: DispatchOutcome = { kind: "dispatch-failed", error: runResult.stderr || runResult.stdout };
       return {
-        result: { repoName: repo.name, environment, workflow: workflowDisplayName(wf), dispatch: outcome },
+        result: { repoName: repo.name, branch: repo.branch, environment, workflow: workflowDisplayName(wf), dispatch: outcome },
       };
     }
 
-    const run = await d.identifyRun(repo.rootPath, workflowDisplayName(wf), branch, dispatchedAt);
+    const run = await d.identifyRun(repo.rootPath, workflowDisplayName(wf), repo.branch, dispatchedAt);
     const outcome: DispatchOutcome = { kind: "dispatched", runId: run?.databaseId, runUrl: run?.url };
     const result: PerRepositoryResult = {
       repoName: repo.name,
+      branch: repo.branch,
       environment,
       workflow: workflowDisplayName(wf),
       dispatch: outcome,

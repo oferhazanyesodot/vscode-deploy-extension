@@ -20,6 +20,8 @@ export function normalizeConfig(raw: {
   pinnedWorkflows?: unknown;
   dirtyHandlingDefault?: unknown;
   deployOrder?: unknown;
+  hiddenProfiles?: unknown;
+  manualProfiles?: unknown;
 }): DeployConfig {
   const mapping: Record<string, string> = {};
   if (raw.workflowMapping && typeof raw.workflowMapping === "object") {
@@ -45,11 +47,32 @@ export function normalizeConfig(raw: {
     ? raw.deployOrder.filter((x): x is string => typeof x === "string")
     : [];
 
+  const hiddenProfiles = Array.isArray(raw.hiddenProfiles)
+    ? raw.hiddenProfiles.filter((x): x is string => typeof x === "string")
+    : [];
+
+  const manualProfiles: Record<string, Record<string, string>> = {};
+  if (raw.manualProfiles && typeof raw.manualProfiles === "object" && !Array.isArray(raw.manualProfiles)) {
+    for (const [name, mapping] of Object.entries(raw.manualProfiles as Record<string, unknown>)) {
+      if (mapping && typeof mapping === "object" && !Array.isArray(mapping)) {
+        const clean: Record<string, string> = {};
+        for (const [repo, branch] of Object.entries(mapping as Record<string, unknown>)) {
+          if (typeof branch === "string") {
+            clean[repo] = branch;
+          }
+        }
+        manualProfiles[name] = clean;
+      }
+    }
+  }
+
   return {
     workflowMapping: mapping,
     pollIntervalSeconds: clampInterval(raw.pollIntervalSeconds),
     pinnedWorkflows: pinned,
     dirtyHandlingDefault: dirty,
     deployOrder,
+    hiddenProfiles,
+    manualProfiles,
   };
 }

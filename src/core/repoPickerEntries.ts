@@ -1,21 +1,31 @@
 import { RepoCandidate } from "./types";
-import { ProfileInfo, RepoPickerEntry } from "./profileTypes";
+import { Profile, RepoPickerEntry, ProfileGroup } from "./profileTypes";
+import { classifyProfileGroup } from "./profileGrouping";
 
 // Pure: build the repo picker entries — one individual entry per repo plus one
-// profile entry per detected profile. When there are no profiles, only individual
-// entries are produced.
+// profile entry per profile. Profiles carry their section (live/environment/hidden)
+// and a manual tag. `hiddenNames` marks which profiles belong to the hidden section.
 export function buildEntries(
   repos: RepoCandidate[],
-  profiles: ProfileInfo[]
+  profiles: Profile[],
+  hiddenNames: string[] = []
 ): RepoPickerEntry[] {
   const entries: RepoPickerEntry[] = [];
+  const hiddenSet = new Set(hiddenNames);
   for (const p of profiles) {
+    const manual = p.kind === "manual";
+    const section: ProfileGroup | "hidden" = hiddenSet.has(p.name)
+      ? "hidden"
+      : classifyProfileGroup(p.name);
+    const count = p.targets.length;
+    const tag = manual ? " (manual)" : "";
     entries.push({
       kind: "profile",
-      branch: p.branch,
-      repos: p.repos,
-      count: p.count,
-      label: `Deploy profile: ${p.branch} (${p.count} repos)`,
+      profile: p,
+      count,
+      manual,
+      section,
+      label: `Deploy profile: ${p.name} (${count} repos)${tag}`,
     });
   }
   for (const r of repos) {

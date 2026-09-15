@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { SwitchProfileHandler, SwitchProfileDeps } from "../src/switchProfileHandler";
 import { RepoCandidate } from "../src/core/types";
-import { RepoBranches } from "../src/core/profileTypes";
+import { RepoBranches, Profile } from "../src/core/profileTypes";
 
 const repos: RepoCandidate[] = [
   { name: "a", rootPath: "C:/r/a", hasDeployWorkflow: true },
@@ -19,7 +19,7 @@ function baseDeps(over: Partial<SwitchProfileDeps> = {}): SwitchProfileDeps {
   return {
     discoverRepos: vi.fn(() => repos),
     listBranches: vi.fn(async (name: string) => branches(name)),
-    pickProfile: vi.fn(async () => "fix/x"),
+    pickProfile: vi.fn(async () => ({ name: "fix/x", kind: "auto" as const, targets: [{ repo: "a", branch: "fix/x" }, { repo: "b", branch: "fix/x" }] })),
     status: vi.fn(async () => ({ staged: false, unstaged: false, untracked: false })),
     promptDirtyAction: vi.fn(async () => "stash" as const),
     stashChanges: vi.fn(async () => ok()),
@@ -48,7 +48,7 @@ describe("SwitchProfileHandler", () => {
   });
 
   it("no candidate repo shows error and ends", async () => {
-    const d = baseDeps({ pickProfile: vi.fn(async () => "does-not-exist") });
+    const d = baseDeps({ pickProfile: vi.fn(async () => ({ name: "does-not-exist", kind: "auto" as const, targets: [{ repo: "a", branch: "does-not-exist" }] })) });
     await new SwitchProfileHandler(d).execute();
     expect(d.notifyError).toHaveBeenCalled();
     expect(d.checkoutBranch).not.toHaveBeenCalled();

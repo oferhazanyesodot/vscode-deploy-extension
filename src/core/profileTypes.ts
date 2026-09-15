@@ -7,11 +7,13 @@ export interface RepoBranches {
   remote: string[]; // origin/ prefix stripped
 }
 
-export type BranchLocation = "local" | "remote" | "both";
+// 'not-found' applies to a manual target whose branch exists in neither location.
+export type BranchLocation = "local" | "remote" | "both" | "not-found";
 
 export interface CandidateRepo {
   name: string;
   rootPath: string;
+  branch: string; // this repo's target branch (per-target model)
   location: BranchLocation;
 }
 
@@ -21,10 +23,42 @@ export interface ProfileInfo {
   count: number;
 }
 
+// --- Generalized profile model ---
+export type ProfileKind = "auto" | "manual";
+
+export interface ProfileTarget {
+  repo: string;   // repository name
+  branch: string; // branch to check out (Switch) / dispatch against (Deploy)
+}
+
+export interface Profile {
+  name: string;
+  kind: ProfileKind;
+  targets: ProfileTarget[];
+}
+
+export const ENVIRONMENT_PROFILE_NAMES = [
+  "dev",
+  "preprod",
+  "prod",
+  "main",
+  "master",
+  "staging",
+] as const;
+
+export type ProfileGroup = "live" | "environment";
+
+export interface ProfileSections {
+  live: Profile[];
+  environment: Profile[];
+  hidden: Profile[];
+}
+
 export interface ProfileSelection {
   kind: "profile";
-  branch: string;
-  candidates: CandidateRepo[];
+  name: string;
+  profileKind: ProfileKind;
+  candidates: CandidateRepo[]; // each carries its own target branch
 }
 
 // --- Repo picker entries ---
@@ -36,9 +70,10 @@ export interface IndividualRepoEntry {
 
 export interface ProfileDeployEntry {
   kind: "profile";
-  branch: string;
-  repos: string[];
+  profile: Profile;
   count: number;
+  manual: boolean;
+  section: ProfileGroup | "hidden";
   label: string;
 }
 
@@ -52,7 +87,8 @@ export type DirtyDecision = "proceed" | "prompt" | DirtyHandlingAction;
 // --- Checkout ---
 export type CheckoutPlan =
   | { kind: "local"; branch: string }
-  | { kind: "fetch-track"; branch: string };
+  | { kind: "fetch-track"; branch: string }
+  | { kind: "not-found"; branch: string };
 
 // --- Switch results ---
 export type CheckoutOutcome =
@@ -62,6 +98,7 @@ export type CheckoutOutcome =
 
 export interface SwitchResult {
   repoName: string;
+  branch: string;
   location: BranchLocation;
   stashed: boolean;
   outcome: CheckoutOutcome;
@@ -83,6 +120,7 @@ export type DispatchOutcome =
 
 export interface PerRepositoryResult {
   repoName: string;
+  branch: string;
   environment: DeployEnvironment;
   workflow?: string;
   dispatch: DispatchOutcome;

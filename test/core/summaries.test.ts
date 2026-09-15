@@ -14,6 +14,7 @@ describe("buildSwitchSummary", () => {
     );
     const resultArb: fc.Arbitrary<SwitchResult> = fc.record({
       repoName: fc.stringMatching(/^r[0-9]{1,2}$/),
+      branch: fc.stringMatching(/^b[0-9]{1,2}$/),
       location: fc.constantFrom<BranchLocation>("local", "remote", "both"),
       stashed: fc.boolean(),
       outcome: outcomeArb,
@@ -41,6 +42,7 @@ describe("buildDeploymentSummary", () => {
     );
     const resultArb: fc.Arbitrary<PerRepositoryResult> = fc.record({
       repoName: fc.stringMatching(/^r[0-9]{1,2}$/),
+      branch: fc.stringMatching(/^b[0-9]{1,2}$/),
       environment: fc.constantFrom<DeployEnvironment>("dev", "preprod", "prod"),
       dispatch: dispatchArb,
       runConclusion: fc.option(fc.constantFrom("success", "failure", "cancelled"), { nil: undefined }),

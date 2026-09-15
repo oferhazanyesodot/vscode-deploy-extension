@@ -10,9 +10,11 @@ import { RepoResolver } from "./services/repoResolver";
 import { WorkflowResolver } from "./services/workflowResolver";
 import { InputCollector } from "./services/inputCollector";
 import { RunTracker } from "./services/runTracker";
+import { ProfilePicker } from "./services/profilePicker";
+import { ManualProfileBuilder } from "./services/manualProfileBuilder";
 import { MultiRunTracker, RepoPhase, TrackedRun } from "./services/multiRunTracker";
 import { DeployEnvironment, Cancelled, CANCELLED, RunPhase, WorkflowInputDef } from "./core/types";
-import { ProfileInfo, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
+import { Profile, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
 
 const ENVIRONMENTS: DeployEnvironment[] = ["dev", "preprod", "prod"];
 
@@ -138,41 +140,44 @@ function buildDeps(services: {
   };
 }
 
-async function pickProfile(profiles: ProfileInfo[]): Promise<string | Cancelled> {
-  const items = profiles.map((p) => ({
-    label: `$(git-branch) ${p.branch}`,
-    description: `${p.count} repos`,
-    branch: p.branch,
-  }));
-  const picked = await vscode.window.showQuickPick(items, {
-    title: "Switch profile (select a shared branch, or type one)",
-    placeHolder: "Profile branch name",
-  });
-  if (picked) {
-    return picked.branch;
-  }
-  // Allow free-text entry when nothing is picked.
-  const typed = await vscode.window.showInputBox({
-    title: "Switch profile",
-    prompt: "Enter a branch name to switch all matching repos to",
-  });
-  if (typed === undefined || typed.trim() === "") {
-    return CANCELLED;
-  }
-  return typed.trim();
+function autoProfileFrom(branch: string): Profile {
+  // Free-text / auto selection: the RepoResolver/handler will re-derive targets;
+  // here we only need a named auto profile placeholder for the switch flow.
+  return { name: branch, kind: "auto", targets: [] };
 }
 
+async function pickProfileViaPicker(
+  picker: ProfilePicker,
+  autoProfiles: Profile[]
+): Promise<Profile | Cancelled> {
+  const choice = await picker.pick(autoProfiles, {
+    title: "Switch profile (select a shared branch or manual profile, or type one)",
+    placeholder: "Profile",
+  });
+  if (choice.kind === "cancelled") {
+    return CANCELLED;
+  }
+  if (choice.kind === "profile") {
+    return choice.profile;
+  }
+  if (choice.kind === "freeText") {
+    return autoProfileFrom(choice.branch);
+  }
+  // A repo entry is not applicable in the switch picker (no individual repos passed).
+  return CANCELLED;
+}
 function buildSwitchDeps(services: {
   git: GitService;
   repoResolver: RepoResolver;
   notify: NotificationService;
   config: ConfigService;
+  picker: ProfilePicker;
 }): SwitchProfileDeps {
-  const { git, repoResolver, notify, config } = services;
+  const { git, repoResolver, notify, config, picker } = services;
   return {
     discoverRepos: () => repoResolver.discoverRepos(),
     listBranches: (name, root) => git.listBranches(name, root),
-    pickProfile,
+    pickProfile: (autoProfiles) => pickProfileViaPicker(picker, autoProfiles),
     status: (root) => git.status(root),
     promptDirtyAction: async (repoName) => {
       const picked = await vscode.window.showQuickPick(
@@ -210,7 +215,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const git = new GitService(proc);
   const config = new ConfigService();
   const notify = new NotificationService();
-  const repoResolver = new RepoResolver(git);
+  const manualBuilder = new ManualProfileBuilder(git, config);
+  const tempResolver = new RepoResolver(git, undefined as unknown as ProfilePicker);
+  const profilePicker = new ProfilePicker(config, manualBuilder, () => tempResolver.discoverRepos().filter((r) => r.hasDeployWorkflow));
+  const repoResolver = new RepoResolver(git, profilePicker);
   const workflowResolver = new WorkflowResolver(gh, config);
   const inputCollector = new InputCollector();
   const runTracker = new RunTracker(gh);
@@ -221,7 +229,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   const handler = new DeployCommandHandler(deps);
 
-  const switchDeps = buildSwitchDeps({ git, repoResolver, notify, config });
+  const switchDeps = buildSwitchDeps({ git, repoResolver, notify, config, picker: profilePicker });
   const switchHandler = new SwitchProfileHandler(switchDeps);
 
   const deployCommand = vscode.commands.registerCommand("deploy.run", () => handler.execute());
