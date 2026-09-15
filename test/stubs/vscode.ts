@@ -73,6 +73,9 @@ export class TreeItem {
   description?: string;
   contextValue?: string;
   checkboxState?: number;
+  iconPath?: unknown;
+  tooltip?: string;
+  command?: unknown;
   constructor(label: string, collapsibleState = 0) {
     this.label = label;
     this.collapsibleState = collapsibleState;

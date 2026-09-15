@@ -47,4 +47,29 @@ export class GitService {
   stashChanges(repoRoot: string): Promise<ProcessResult> {
     return this.run(repoRoot, ["stash", "push", "--include-untracked"]);
   }
+
+  pull(repoRoot: string): Promise<ProcessResult> {
+    return this.run(repoRoot, ["pull", "--ff-only"]);
+  }
+
+  fetchAll(repoRoot: string): Promise<ProcessResult> {
+    return this.run(repoRoot, ["fetch", "--all", "--prune"]);
+  }
+
+  // Ahead/behind counts vs the branch's upstream. Returns {0,0} when there is no
+  // upstream or the command fails.
+  async aheadBehind(repoRoot: string): Promise<{ ahead: number; behind: number }> {
+    const r = await this.run(repoRoot, ["rev-list", "--left-right", "--count", "@{upstream}...HEAD"]);
+    if (r.code !== 0) {
+      return { ahead: 0, behind: 0 };
+    }
+    // Output: "<behind>\t<ahead>" for upstream...HEAD
+    const parts = r.stdout.trim().split(/\s+/);
+    const behind = Number.parseInt(parts[0] ?? "0", 10);
+    const ahead = Number.parseInt(parts[1] ?? "0", 10);
+    return {
+      ahead: Number.isNaN(ahead) ? 0 : ahead,
+      behind: Number.isNaN(behind) ? 0 : behind,
+    };
+  }
 }

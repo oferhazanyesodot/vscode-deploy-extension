@@ -18,6 +18,11 @@ import { eligibleTargets } from "./core/eligibleTargets";
 import { ProfileSelection } from "./core/profileTypes";
 import { branchUrl, comparePrUrl, branchLinksText, branchLinksMarkdown, ProfileBranchLink } from "./core/repoLinks";
 import { addExclusion, removeExclusion, stillExcludedByGlob } from "./core/exclusionToggle";
+import { DeployHistoryStore } from "./services/deployHistoryStore";
+import { DeployHistoryEntry, historyLabel, historyDescription, historyMarkdown } from "./core/deployHistory";
+import { targetsToManualMapping, uniqueManualName, addRepoToMapping, removeRepoFromMapping } from "./core/duplicateProfile";
+import { moveUp, moveDown } from "./core/reorder";
+import { RepoGitStatus } from "./services/deployProfilesTreeProvider";
 import { MultiRunTracker, RepoPhase, TrackedRun } from "./services/multiRunTracker";
 import { DeployEnvironment, Cancelled, CANCELLED, RunPhase, WorkflowInputDef } from "./core/types";
 import { Profile, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
@@ -115,8 +120,8 @@ function buildDeps(services: {
         const running = phases
           .filter((p) => p.phase.kind !== "completed")
           .map((p) => p.repoName);
-        const detail = running.length > 0 ? ` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${running.join(", ")}` : "";
-        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·  Click "Cancel deploy" to stop`);
+        const detail = running.length > 0 ? ` - ${running.join(", ")}` : "";
+        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  |  Click "Cancel deploy" to stop`);
         onUpdate(phases);
       };
       const cancelled = () => activeDeploy?.cts.token.isCancellationRequested ?? false;
@@ -224,9 +229,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Capability C: Deploy Profiles tree view
   const checkboxes = new CheckboxStateStore(context.globalState);
+  const history = new DeployHistoryStore(context.globalState);
   const treeProvider = new DeployProfilesTreeProvider({
     discoverRepos: () => repoResolver.discoverRepos(),
     listBranches: (name, root) => git.listBranches(name, root),
+    repoStatus: async (name, root): Promise<RepoGitStatus> => {
+      const [current, status, ab] = await Promise.all([
+        git.currentBranch(root),
+        git.status(root),
+        git.aheadBehind(root),
+      ]);
+      const dirty = status.staged || status.unstaged || status.untracked;
+      return { current, dirty, ahead: ab.ahead, behind: ab.behind };
+    },
     config,
     checkboxes,
   });
@@ -427,24 +442,80 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   });
 
-  const cmdTreeDeploy = vscode.commands.registerCommand("deploy.profiles.deploy", async (node: ProfileNode) => {
+  // Shared runner: guards against concurrent deploys, streams live per-repo phases
+  // to the tree, records history, and remembers the last deploy for "Re-run last".
+  const runProfileDeploy = async (
+    profileName: string,
+    selection: ProfileSelection,
+    presetEnvironment?: DeployEnvironment
+  ): Promise<void> => {
     if (activeDeploy) {
       void vscode.window.showWarningMessage("A profile deploy is already in progress. Cancel it first.");
       return;
     }
-    const selection = buildSelection(node);
-    if (!selection) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to deploy.`); return; }
     activeDeploy = { cts: new vscode.CancellationTokenSource() };
     void vscode.commands.executeCommand("setContext", "deploy.deploying", true);
-    setSidebarMessage(`$(sync~spin) Preparing deploy for "${node.profile.name}"...`);
+    setSidebarMessage(`$(sync~spin) Preparing deploy for "${profileName}"...`);
     try {
-      await handler.executeProfileDeploy(selection);
+      const outcome = await handler.executeProfileDeploy(selection, {
+        presetEnvironment,
+        onPhases: (phases) => treeProvider.setDeployPhases(phases),
+      });
+      if (outcome) {
+        const succeeded = outcome.results.filter(
+          (r) => r.dispatch.kind === "dispatched" && (r.runConclusion === undefined || r.runConclusion === "success")
+        ).length;
+        const entry: DeployHistoryEntry = {
+          profileName,
+          environment: outcome.environment,
+          timestamp: new Date().toISOString(),
+          succeeded,
+          failed: outcome.results.length - succeeded,
+          repos: outcome.results.map((r) => ({
+            repo: r.repoName,
+            branch: r.branch,
+            conclusion: r.runConclusion,
+            runUrl: r.runUrl,
+          })),
+        };
+        await history.add(entry);
+        await context.globalState.update("deploy.lastSelection", { profileName, selection, environment: outcome.environment });
+      }
     } finally {
       activeDeploy.cts.dispose();
       activeDeploy = undefined;
       void vscode.commands.executeCommand("setContext", "deploy.deploying", false);
       setSidebarMessage(undefined);
+      treeProvider.clearDeployPhases();
     }
+  };
+
+  const cmdTreeDeploy = vscode.commands.registerCommand("deploy.profiles.deploy", async (node: ProfileNode) => {
+    const selection = buildSelection(node);
+    if (!selection) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to deploy.`); return; }
+    await runProfileDeploy(node.profile.name, selection);
+  });
+  // Environment submenu: deploy straight to dev/preprod/prod without the picker.
+  const makeEnvDeploy = (env: DeployEnvironment) =>
+    vscode.commands.registerCommand(`deploy.profiles.deploy.${env}`, async (node: ProfileNode) => {
+      const selection = buildSelection(node);
+      if (!selection) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to deploy.`); return; }
+      await runProfileDeploy(node.profile.name, selection, env);
+    });
+  const cmdDeployDev = makeEnvDeploy("dev");
+  const cmdDeployPreprod = makeEnvDeploy("preprod");
+  const cmdDeployProd = makeEnvDeploy("prod");
+
+  // Re-run the last deploy (same profile + environment), skipping the picker.
+  const cmdReRunLast = vscode.commands.registerCommand("deploy.profiles.reRunLast", async () => {
+    const last = context.globalState.get<{ profileName: string; selection: ProfileSelection; environment: DeployEnvironment }>("deploy.lastSelection");
+    if (!last) { void vscode.window.showInformationMessage("No previous deploy to re-run yet."); return; }
+    const confirm = await vscode.window.showInformationMessage(
+      `Re-run last deploy: "${last.profileName}" to ${last.environment}?`,
+      "Re-run"
+    );
+    if (confirm !== "Re-run") { return; }
+    await runProfileDeploy(last.profileName, last.selection, last.environment);
   });
   const cmdTreeCancel = vscode.commands.registerCommand("deploy.profiles.cancel", () => {
     if (!activeDeploy) {
@@ -522,6 +593,173 @@ export function activate(context: vscode.ExtensionContext): void {
     await treeProvider.refresh();
   });
   const cmdTreeRefresh = vscode.commands.registerCommand("deploy.profiles.refresh", () => treeProvider.refresh());
+  const cmdRefreshStatuses = vscode.commands.registerCommand("deploy.profiles.refreshStatuses", async () => {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "Refreshing repo statuses (branch, dirty, ahead/behind)..." },
+      () => treeProvider.refreshStatuses()
+    );
+  });
+
+  // Deploy history: show a picker of recent deploys; selecting one opens its runs.
+  const cmdShowHistory = vscode.commands.registerCommand("deploy.profiles.showHistory", async () => {
+    const entries = history.all();
+    if (entries.length === 0) { void vscode.window.showInformationMessage("No deploys recorded yet."); return; }
+    const picked = await vscode.window.showQuickPick(
+      entries.map((e, i) => ({ label: historyLabel(e), description: historyDescription(e), detail: `${e.repos.length} repo(s)`, index: i })),
+      { title: "Deploy history", placeHolder: "Select a deploy to open its runs / copy its summary" }
+    );
+    if (!picked) { return; }
+    const entry = entries[picked.index];
+    const action = await vscode.window.showQuickPick(
+      [
+        { label: "$(link-external) Open all runs", value: "open" },
+        { label: "$(markdown) Copy summary as Markdown", value: "md" },
+      ],
+      { title: historyLabel(entry) }
+    );
+    if (!action) { return; }
+    if (action.value === "open") {
+      for (const r of entry.repos) {
+        if (r.runUrl) { await vscode.env.openExternal(vscode.Uri.parse(r.runUrl)); }
+      }
+    } else {
+      await vscode.env.clipboard.writeText(historyMarkdown(entry));
+      void vscode.window.showInformationMessage("Copied deploy summary to clipboard.");
+    }
+  });
+  const cmdClearHistory = vscode.commands.registerCommand("deploy.profiles.clearHistory", async () => {
+    const confirm = await vscode.window.showWarningMessage("Clear all deploy history?", { modal: true }, "Clear");
+    if (confirm === "Clear") { await history.clear(); void vscode.window.showInformationMessage("Deploy history cleared."); }
+  });
+
+  // Duplicate a profile into a new editable manual profile (snapshot per-repo branches).
+  const cmdDuplicateManual = vscode.commands.registerCommand("deploy.profiles.duplicateAsManual", async (node: ProfileNode) => {
+    const mapping = targetsToManualMapping(node.profile.targets);
+    if (Object.keys(mapping).length === 0) { void vscode.window.showWarningMessage("Nothing to duplicate: profile has no targets."); return; }
+    const suggested = uniqueManualName(node.profile.name, Object.keys(config.manualProfiles()));
+    const name = await vscode.window.showInputBox({ title: "Duplicate as manual profile", prompt: "Name for the new manual profile", value: suggested });
+    if (!name || name.trim() === "") { return; }
+    await config.setManualProfile(name.trim(), mapping);
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`Created manual profile "${name.trim()}" from "${node.profile.name}".`);
+  });
+
+  // Add a repo to a manual profile (pick repo, then branch).
+  const cmdAddRepoToManual = vscode.commands.registerCommand("deploy.profiles.addRepo", async (node: ProfileNode) => {
+    if (node.profile.kind !== "manual") { void vscode.window.showWarningMessage("Only manual profiles can be edited."); return; }
+    const repos = repoResolver.discoverRepos().filter((r) => r.hasDeployWorkflow);
+    const repoPick = await vscode.window.showQuickPick(repos.map((r) => ({ label: r.name, description: r.rootPath, repo: r })), { title: `Add a repo to "${node.profile.name}"`, placeHolder: "Repository" });
+    if (!repoPick) { return; }
+    const branches = await git.listBranches(repoPick.repo.name, repoPick.repo.rootPath);
+    const names = [...new Set([...branches.local, ...branches.remote])];
+    const branchPick = await vscode.window.showQuickPick(names, { title: `Branch for ${repoPick.repo.name}`, placeHolder: "Branch" });
+    if (branchPick === undefined) { return; }
+    const current = config.manualProfiles()[node.profile.name] ?? {};
+    await config.setManualProfile(node.profile.name, addRepoToMapping(current, repoPick.repo.name, branchPick));
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`Added ${repoPick.repo.name} @ ${branchPick} to "${node.profile.name}".`);
+  });
+
+  // Remove a repo from a manual profile (pick which one).
+  const cmdRemoveRepoFromManual = vscode.commands.registerCommand("deploy.profiles.removeRepo", async (node: ProfileNode) => {
+    if (node.profile.kind !== "manual") { void vscode.window.showWarningMessage("Only manual profiles can be edited."); return; }
+    const current = config.manualProfiles()[node.profile.name] ?? {};
+    const repoNames = Object.keys(current);
+    if (repoNames.length === 0) { void vscode.window.showInformationMessage("This manual profile has no repos."); return; }
+    const pick = await vscode.window.showQuickPick(repoNames.map((r) => ({ label: r, description: current[r] })), { title: `Remove a repo from "${node.profile.name}"`, placeHolder: "Repository to remove" });
+    if (!pick) { return; }
+    await config.setManualProfile(node.profile.name, removeRepoFromMapping(current, pick.label));
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`Removed ${pick.label} from "${node.profile.name}".`);
+  });
+
+  // Edit a manual profile: re-run the builder (which overwrites on confirm).
+  const cmdEditManual = vscode.commands.registerCommand("deploy.profiles.editManual", async (node: ProfileNode) => {
+    if (node.profile.kind !== "manual") { void vscode.window.showWarningMessage("Only manual profiles can be edited."); return; }
+    await manualBuilder.run(repoResolver.discoverRepos().filter((rr) => rr.hasDeployWorkflow));
+    await treeProvider.refresh();
+  });
+
+  // Reorder starred profiles.
+  const cmdStarMoveUp = vscode.commands.registerCommand("deploy.profiles.starMoveUp", async (node: ProfileNode) => {
+    await config.setStarredProfiles(moveUp(config.starredProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
+  const cmdStarMoveDown = vscode.commands.registerCommand("deploy.profiles.starMoveDown", async (node: ProfileNode) => {
+    await config.setStarredProfiles(moveDown(config.starredProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
+
+  // Repo-level: copy plain branch name.
+  const cmdRepoCopyName = vscode.commands.registerCommand("deploy.repo.copyBranchName", async (node: RepoCheckboxNode) => {
+    await vscode.env.clipboard.writeText(node.target.branch);
+    void vscode.window.showInformationMessage(`Copied "${node.target.branch}".`);
+  });
+  // Repo-level: open the repo's Actions runs page.
+  const cmdRepoOpenActions = vscode.commands.registerCommand("deploy.repo.openActions", async (node: RepoCheckboxNode) => {
+    const repos = repoResolver.discoverRepos();
+    const root = repos.find((r) => r.name === node.target.repo)?.rootPath ?? treeProvider.branchInfoFor(node.target.repo)?.rootPath;
+    if (!root) { void vscode.window.showWarningMessage(`Could not resolve ${node.target.repo}.`); return; }
+    const url = await gh.repoUrl(root);
+    if (!url) { void vscode.window.showWarningMessage(`Could not resolve the GitHub URL for ${node.target.repo}.`); return; }
+    await vscode.env.openExternal(vscode.Uri.parse(`${url.replace(/\/+$/, "")}/actions`));
+  });
+  // Repo-level: checkout the profile's target branch locally (with dirty prompt).
+  const cmdRepoCheckout = vscode.commands.registerCommand("deploy.repo.checkoutLocal", async (node: RepoCheckboxNode) => {
+    const repos = repoResolver.discoverRepos();
+    const root = repos.find((r) => r.name === node.target.repo)?.rootPath ?? treeProvider.branchInfoFor(node.target.repo)?.rootPath;
+    if (!root) { void vscode.window.showWarningMessage(`Could not resolve ${node.target.repo}.`); return; }
+    const status = await git.status(root);
+    if (status.staged || status.unstaged || status.untracked) {
+      const action = await vscode.window.showWarningMessage(
+        `${node.target.repo} has uncommitted changes. How to proceed with checkout of ${node.target.branch}?`,
+        { modal: true }, "Stash & checkout", "Cancel"
+      );
+      if (action !== "Stash & checkout") { return; }
+      await git.stashChanges(root);
+    }
+    // Try a plain checkout first; fall back to a tracking checkout for remote-only branches.
+    let res = await git.checkoutBranch(root, node.target.branch);
+    if (res.code !== 0) {
+      await git.fetchBranch(root, node.target.branch);
+      res = await git.checkoutTrackingBranch(root, node.target.branch);
+    }
+    if (res.code !== 0) {
+      void vscode.window.showErrorMessage(`Checkout of ${node.target.branch} failed in ${node.target.repo}: ${res.stderr || res.stdout}`);
+    } else {
+      void vscode.window.showInformationMessage(`${node.target.repo} is now on ${node.target.branch}.`);
+    }
+    await treeProvider.refreshStatuses();
+  });
+  // Repo-level: fetch + fast-forward pull.
+  const cmdRepoFetchPull = vscode.commands.registerCommand("deploy.repo.fetchPull", async (node: RepoCheckboxNode) => {
+    const repos = repoResolver.discoverRepos();
+    const root = repos.find((r) => r.name === node.target.repo)?.rootPath ?? treeProvider.branchInfoFor(node.target.repo)?.rootPath;
+    if (!root) { void vscode.window.showWarningMessage(`Could not resolve ${node.target.repo}.`); return; }
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Fetch + pull ${node.target.repo}...` },
+      async () => { await git.fetchAll(root); await git.pull(root); }
+    );
+    await treeProvider.refreshStatuses();
+  });
+
+  // Prod approval reminder.
+  const cmdProdReminder = vscode.commands.registerCommand("deploy.profiles.prodInfo", async (node: ProfileNode) => {
+    const repos = repoResolver.discoverRepos();
+    const first = node.profile.targets[0]?.repo;
+    const root = first ? repos.find((r) => r.name === first)?.rootPath : undefined;
+    const url = root ? await gh.repoUrl(root) : undefined;
+    const open = await vscode.window.showInformationMessage(
+      "Prod deploys use GitHub Environments and may require another person's approval. The approver acts on the run's page (it can be skipped if configured).",
+      ...(url ? ["Open Environments settings"] : [])
+    );
+    if (open && url) { await vscode.env.openExternal(vscode.Uri.parse(`${url.replace(/\/+$/, "")}/settings/environments`)); }
+  });
+
+  // Settings quick-edit: jump to the relevant deploy.* setting.
+  const cmdOpenSettings = vscode.commands.registerCommand("deploy.openSettings", async () => {
+    await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:ofer.vscode-deploy-extension");
+  });
 
   const deployCommand = vscode.commands.registerCommand("deploy.run", () => handler.execute());
   const switchCommand = vscode.commands.registerCommand("profile.switch", async () => {
@@ -536,7 +774,13 @@ export function activate(context: vscode.ExtensionContext): void {
     cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh,
     cmdRename, cmdClearAlias, cmdRemoveManual, cmdStar, cmdUnstar,
     cmdCopyBranchLinks, cmdCopyMarkdown, cmdOpenBranches, cmdMassPr,
-    cmdRepoCopyLink, cmdRepoOpenBranch, cmdRepoOpenPr, cmdRepoExclude, cmdRepoInclude
+    cmdRepoCopyLink, cmdRepoOpenBranch, cmdRepoOpenPr, cmdRepoExclude, cmdRepoInclude,
+    cmdDeployDev, cmdDeployPreprod, cmdDeployProd, cmdReRunLast,
+    cmdRefreshStatuses, cmdShowHistory, cmdClearHistory,
+    cmdDuplicateManual, cmdAddRepoToManual, cmdRemoveRepoFromManual, cmdEditManual,
+    cmdStarMoveUp, cmdStarMoveDown,
+    cmdRepoCopyName, cmdRepoOpenActions, cmdRepoCheckout, cmdRepoFetchPull,
+    cmdProdReminder, cmdOpenSettings
   );
   if (checkboxSub) { context.subscriptions.push(checkboxSub); }
 }

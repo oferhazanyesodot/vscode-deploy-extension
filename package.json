@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -119,6 +119,89 @@
         "command": "deploy.profiles.unstar",
         "title": "Unstar",
         "icon": "$(star-full)"
+      },
+      {
+        "command": "deploy.profiles.deploy.dev",
+        "title": "Deploy to dev"
+      },
+      {
+        "command": "deploy.profiles.deploy.preprod",
+        "title": "Deploy to preprod"
+      },
+      {
+        "command": "deploy.profiles.deploy.prod",
+        "title": "Deploy to prod"
+      },
+      {
+        "command": "deploy.profiles.reRunLast",
+        "title": "Re-run last deploy",
+        "icon": "$(history)"
+      },
+      {
+        "command": "deploy.profiles.refreshStatuses",
+        "title": "Refresh repo statuses",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "deploy.profiles.showHistory",
+        "title": "Deploy history...",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "deploy.profiles.clearHistory",
+        "title": "Clear deploy history"
+      },
+      {
+        "command": "deploy.profiles.duplicateAsManual",
+        "title": "Duplicate as manual profile...",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "deploy.profiles.addRepo",
+        "title": "Add repo to manual profile..."
+      },
+      {
+        "command": "deploy.profiles.removeRepo",
+        "title": "Remove repo from manual profile..."
+      },
+      {
+        "command": "deploy.profiles.editManual",
+        "title": "Edit manual profile..."
+      },
+      {
+        "command": "deploy.profiles.starMoveUp",
+        "title": "Move up",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "deploy.profiles.starMoveDown",
+        "title": "Move down",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "deploy.profiles.prodInfo",
+        "title": "Prod approval info..."
+      },
+      {
+        "command": "deploy.openSettings",
+        "title": "Deploy: Open Settings",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "deploy.repo.copyBranchName",
+        "title": "Copy branch name"
+      },
+      {
+        "command": "deploy.repo.openActions",
+        "title": "Open Actions page"
+      },
+      {
+        "command": "deploy.repo.checkoutLocal",
+        "title": "Checkout this branch locally"
+      },
+      {
+        "command": "deploy.repo.fetchPull",
+        "title": "Fetch + pull"
       }
     ],
     "configuration": {
@@ -247,6 +330,31 @@
           "command": "deploy.profiles.refresh",
           "when": "view == deployProfiles",
           "group": "navigation@2"
+        },
+        {
+          "command": "deploy.profiles.refreshStatuses",
+          "when": "view == deployProfiles",
+          "group": "navigation@3"
+        },
+        {
+          "command": "deploy.profiles.reRunLast",
+          "when": "view == deployProfiles",
+          "group": "1_more@1"
+        },
+        {
+          "command": "deploy.profiles.showHistory",
+          "when": "view == deployProfiles",
+          "group": "1_more@2"
+        },
+        {
+          "command": "deploy.profiles.clearHistory",
+          "when": "view == deployProfiles",
+          "group": "1_more@3"
+        },
+        {
+          "command": "deploy.openSettings",
+          "when": "view == deployProfiles",
+          "group": "1_more@4"
         }
       ],
       "view/item/context": [
@@ -326,6 +434,46 @@
           "group": "2_pr@1"
         },
         {
+          "submenu": "deploy.envSubmenu",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "0_profile@4"
+        },
+        {
+          "command": "deploy.profiles.duplicateAsManual",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "4_manage@1"
+        },
+        {
+          "command": "deploy.profiles.addRepo",
+          "when": "view == deployProfiles && viewItem =~ /-manual-/",
+          "group": "4_manage@2"
+        },
+        {
+          "command": "deploy.profiles.removeRepo",
+          "when": "view == deployProfiles && viewItem =~ /-manual-/",
+          "group": "4_manage@3"
+        },
+        {
+          "command": "deploy.profiles.editManual",
+          "when": "view == deployProfiles && viewItem =~ /-manual-/",
+          "group": "4_manage@4"
+        },
+        {
+          "command": "deploy.profiles.prodInfo",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "5_info@1"
+        },
+        {
+          "command": "deploy.profiles.starMoveUp",
+          "when": "view == deployProfiles && viewItem =~ /^profile-starred-group/",
+          "group": "inline@4"
+        },
+        {
+          "command": "deploy.profiles.starMoveDown",
+          "when": "view == deployProfiles && viewItem =~ /^profile-starred-group/",
+          "group": "inline@5"
+        },
+        {
           "command": "deploy.repo.copyBranchLink",
           "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
           "group": "1_links@1"
@@ -349,9 +497,55 @@
           "command": "deploy.repo.include",
           "when": "view == deployProfiles && viewItem == 'repo-excluded'",
           "group": "3_exclusion@1"
+        },
+        {
+          "command": "deploy.repo.copyBranchName",
+          "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
+          "group": "1_links@0"
+        },
+        {
+          "command": "deploy.repo.openActions",
+          "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
+          "group": "2_pr@2"
+        },
+        {
+          "command": "deploy.repo.checkoutLocal",
+          "when": "view == deployProfiles && viewItem == 'repo'",
+          "group": "4_git@1"
+        },
+        {
+          "command": "deploy.repo.fetchPull",
+          "when": "view == deployProfiles && viewItem == 'repo'",
+          "group": "4_git@2"
+        }
+      ],
+      "deploy.envSubmenu": [
+        {
+          "command": "deploy.profiles.deploy.dev",
+          "group": "env@1"
+        },
+        {
+          "command": "deploy.profiles.deploy.preprod",
+          "group": "env@2"
+        },
+        {
+          "command": "deploy.profiles.deploy.prod",
+          "group": "env@3"
         }
       ]
-    }
+    },
+    "submenus": [
+      {
+        "id": "deploy.envSubmenu",
+        "label": "Deploy to environment"
+      }
+    ],
+    "viewsWelcome": [
+      {
+        "view": "deployProfiles",
+        "contents": "No deploy profiles found yet.\n\nProfiles are sets of matching branches across your repos (auto), or repo->branch maps you define (manual).\n\n[Add manual profile](command:deploy.profiles.addManual)\n[Open settings](command:deploy.openSettings)\n\nOpen the parent folder that contains your repos so they can be discovered."
+      }
+    ]
   },
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",

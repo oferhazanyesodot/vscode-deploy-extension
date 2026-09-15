@@ -6,9 +6,19 @@ import { assembleProfiles, manualProfilesFromConfig } from "../core/manualProfil
 import { buildProfileSections } from "../core/profileGrouping";
 import { classifyProfile, RepoBranchInfo } from "../core/branchClassification";
 import { isGloballyExcluded } from "../core/globExclusion";
+import { computeDrift } from "../core/branchDrift";
+import { RepoPhase } from "./multiRunTracker";
 import { GitService } from "./gitService";
 import { ConfigService } from "./configService";
 import { CheckboxStateStore } from "./checkboxStateStore";
+
+// Lazy per-repo git status used for drift / dirty / ahead-behind badges.
+export interface RepoGitStatus {
+  current: string;
+  dirty: boolean;
+  ahead: number;
+  behind: number;
+}
 
 type GroupKind = "starred" | "live" | "manual" | "environment" | "hidden";
 
@@ -52,11 +62,17 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
   private globalExclusions: string[] = [];
   private aliases: Record<string, string> = {};
   private starred = new Set<string>();
+  // Lazy per-repo git status (drift/dirty/ahead-behind). Populated by refreshStatuses().
+  private gitStatus = new Map<string, RepoGitStatus>();
+  private statusesLoaded = false;
+  // Live per-repo deploy phase during an active profile deploy.
+  private deployPhases = new Map<string, RepoPhase>();
 
   constructor(
     private readonly deps: {
       discoverRepos(): RepoCandidate[];
       listBranches(name: string, root: string): Promise<{ repoName: string; local: string[]; remote: string[] }>;
+      repoStatus(name: string, root: string): Promise<RepoGitStatus>;
       config: ConfigService;
       checkboxes: CheckboxStateStore;
     }
@@ -88,6 +104,38 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     this.sections = buildProfileSections(all, this.deps.config.hiddenProfiles(), starredNames);
     this.globalExclusions = this.deps.config.globalExclusions();
     this.aliases = this.deps.config.profileAliases();
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  // Lazily gather per-repo git status (current branch, dirty, ahead/behind).
+  // Called on demand via the "Refresh statuses" action, not on every refresh.
+  async refreshStatuses(): Promise<void> {
+    const repos = this.deps.discoverRepos().filter((r) => r.hasDeployWorkflow);
+    const next = new Map<string, RepoGitStatus>();
+    for (const repo of repos) {
+      try {
+        next.set(repo.name, await this.deps.repoStatus(repo.name, repo.rootPath));
+      } catch {
+        // leave unknown
+      }
+    }
+    this.gitStatus = next;
+    this.statusesLoaded = true;
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  // Set live deploy phases (per repo) during an active profile deploy and refresh
+  // the affected repo rows so they show a spinner / check / cross.
+  setDeployPhases(phases: RepoPhase[]): void {
+    this.deployPhases = new Map(phases.map((p) => [p.repoName, p]));
+    this._onDidChangeTreeData.fire(undefined);
+  }
+
+  clearDeployPhases(): void {
+    if (this.deployPhases.size === 0) {
+      return;
+    }
+    this.deployPhases = new Map();
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -185,7 +233,7 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
       }
       item.iconPath = color ? new vscode.ThemeIcon(iconId, color) : new vscode.ThemeIcon(iconId);
 
-      // contextValue carries: base group, manual flag, star state â€” so menu
+      // contextValue carries: base group, manual flag, star state Ã¢â‚¬â€ so menu
       // when-clauses can show the right inline/context actions.
       // Examples: "profile-live-manual-unstarred", "profile-env-starred".
       const base =
@@ -203,24 +251,93 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
       item.contextValue = base + kindTag + starTag;
 
       const aliasNote = alias ? ` (shown as "${alias}")` : "";
-      item.tooltip = `${node.profile.name}${aliasNote} â€” ${node.profile.targets.length} repo(s)${manual ? ", manual profile" : ""}${node.starred ? ", starred" : ""}`;
+      item.tooltip = `${node.profile.name}${aliasNote} Ã¢â‚¬â€ ${node.profile.targets.length} repo(s)${manual ? ", manual profile" : ""}${node.starred ? ", starred" : ""}`;
       return item;
     }
     // repo checkbox node
     const item = new vscode.TreeItem(node.target.repo, vscode.TreeItemCollapsibleState.None);
+    const phase = this.deployPhases.get(node.target.repo);
+    const gs = this.gitStatus.get(node.target.repo);
+
+    // Build a description with branch/location plus any status badges.
+    const parts: string[] = [`${node.target.branch} [${node.location}]`];
+
+    // Drift: currently checked-out branch differs from the profile target.
+    if (gs) {
+      const drift = computeDrift(gs.current, node.target.branch);
+      if (drift.drifted) {
+        parts.push(`âš  on ${gs.current}`);
+      }
+      if (gs.dirty) {
+        parts.push("â— dirty");
+      }
+      if (gs.ahead > 0 || gs.behind > 0) {
+        parts.push(`â†‘${gs.ahead} â†“${gs.behind}`);
+      }
+    }
+
     if (node.globallyExcluded) {
-      item.description = `${node.target.branch} [${node.location}] (excluded)`;
+      parts.push("(excluded)");
+      item.description = parts.join("  ");
       item.contextValue = "repo-excluded";
       item.iconPath = new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"));
       // no checkboxState -> not toggleable
-    } else {
-      item.description = `${node.target.branch} [${node.location}]`;
-      item.contextValue = "repo";
-      item.iconPath = new vscode.ThemeIcon("repo");
-      const checked = this.deps.checkboxes.isChecked(node.profileName, node.target.repo);
-      item.checkboxState = checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+      item.tooltip = this.repoTooltip(node, gs, phase);
+      return item;
     }
+
+    item.contextValue = "repo";
+    const checked = this.deps.checkboxes.isChecked(node.profileName, node.target.repo);
+    item.checkboxState = checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
+
+    // Icon reflects an active deploy phase first, otherwise drift/dirty, else repo.
+    if (phase) {
+      if (phase.phase.kind === "completed") {
+        const c = phase.phase.conclusion;
+        parts.push(c);
+        item.iconPath =
+          c === "success"
+            ? new vscode.ThemeIcon("pass", new vscode.ThemeColor("charts.green"))
+            : c === "cancelled"
+            ? new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("charts.yellow"))
+            : new vscode.ThemeIcon("error", new vscode.ThemeColor("charts.red"));
+      } else if (phase.phase.kind === "waiting-approval") {
+        parts.push("waiting approval");
+        item.iconPath = new vscode.ThemeIcon("watch", new vscode.ThemeColor("charts.yellow"));
+      } else {
+        const pct = phase.progress ? ` ${phase.progress.percent}%` : "";
+        parts.push(`running${pct}`);
+        item.iconPath = new vscode.ThemeIcon("sync~spin");
+      }
+    } else if (gs && computeDrift(gs.current, node.target.branch).drifted) {
+      item.iconPath = new vscode.ThemeIcon("warning", new vscode.ThemeColor("charts.yellow"));
+    } else if (gs && gs.dirty) {
+      item.iconPath = new vscode.ThemeIcon("circle-filled", new vscode.ThemeColor("charts.orange"));
+    } else {
+      item.iconPath = new vscode.ThemeIcon("repo");
+    }
+
+    item.description = parts.join("  ");
+    item.tooltip = this.repoTooltip(node, gs, phase);
     return item;
+  }
+
+  private repoTooltip(node: RepoCheckboxNode, gs?: RepoGitStatus, phase?: RepoPhase): string {
+    const lines = [`${node.target.repo} â€” target branch: ${node.target.branch} [${node.location}]`];
+    if (gs) {
+      lines.push(`Checked out: ${gs.current || "unknown"}`);
+      if (computeDrift(gs.current, node.target.branch).drifted) {
+        lines.push(`âš  Drift: on ${gs.current}, profile wants ${node.target.branch}`);
+      }
+      lines.push(`Working tree: ${gs.dirty ? "dirty (uncommitted changes)" : "clean"}`);
+      lines.push(`Ahead ${gs.ahead}, behind ${gs.behind} vs upstream`);
+    } else if (!this.statusesLoaded) {
+      lines.push("(run 'Refresh statuses' for branch/dirty/ahead-behind)");
+    }
+    if (phase) {
+      lines.push(`Deploy: ${phase.phase.kind}`);
+    }
+    return lines.join("\n");
   }
 
   async handleCheckboxChange(

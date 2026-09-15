@@ -203,35 +203,52 @@ export class DeployCommandHandler {
 
   // Profile deploy: dispatch every candidate repo using the profile branch as ref.
   // No checkout, no working-tree mutation. Non-atomic; per-repo results recorded.
-  async executeProfileDeploy(selection: ProfileSelection): Promise<void> {
+  //
+  // options.presetEnvironment: skip the environment picker (used by the "Deploy to
+  //   dev/preprod/prod" submenu).
+  // options.onPhases: receive live per-repo tracking updates (for tree row status).
+  // Returns the per-repo results (or undefined if aborted before dispatch), so the
+  // caller can record deploy history.
+  async executeProfileDeploy(
+    selection: ProfileSelection,
+    options?: {
+      presetEnvironment?: DeployEnvironment;
+      onPhases?: (phases: RepoPhase[]) => void;
+    }
+  ): Promise<{ environment: DeployEnvironment; results: PerRepositoryResult[] } | undefined> {
     const d = this.deps;
     const branch = selection.name;
     const candidates = selection.candidates;
 
     if (candidates.length === 0) {
       d.notifyError(`No repository contains the profile branch ${branch}.`);
-      return;
+      return undefined;
     }
 
     // Auth check against the first candidate host (same host in practice).
     if (!(await d.ghIsAuthenticated(candidates[0].rootPath))) {
       d.notifyError("GitHub CLI is not authenticated. Run `gh auth login` and try again.");
-      return;
+      return undefined;
     }
 
-    // Single environment for all (Req 11).
-    const env = await d.pickEnvironment();
-    if (isCancelled(env)) {
-      return;
+    // Single environment for all (Req 11). Skip the picker when preset.
+    let environment: DeployEnvironment;
+    if (options?.presetEnvironment) {
+      environment = options.presetEnvironment;
+    } else {
+      const env = await d.pickEnvironment();
+      if (isCancelled(env)) {
+        return undefined;
+      }
+      environment = env as DeployEnvironment;
     }
-    const environment = env as DeployEnvironment;
 
     // Gating (Req 12).
     const gate = gateFor(environment);
     if (gate.kind === "confirm") {
       const proceed = await d.confirmPreprodProfile(branch, candidates.map((c) => c.name));
       if (!proceed) {
-        return;
+        return undefined;
       }
     }
 
@@ -240,7 +257,6 @@ export class DeployCommandHandler {
 
     const results: PerRepositoryResult[] = [];
     const tracked: TrackedRun[] = [];
-    const dispatchedAt = new Date();
 
     for (const repo of ordered) {
       const result = await this.dispatchOne(repo, branch, environment);
@@ -252,7 +268,7 @@ export class DeployCommandHandler {
 
     // Track all identified runs together (Req 15), then record conclusions.
     if (tracked.length > 0) {
-      const phases = await d.trackMany(tracked, () => {});
+      const phases = await d.trackMany(tracked, options?.onPhases ?? (() => {}));
       for (const phase of phases) {
         const res = results.find((r) => r.repoName === phase.repoName);
         if (res && phase.phase.kind === "completed") {
@@ -265,6 +281,7 @@ export class DeployCommandHandler {
     // Summary (Req 16).
     d.deploymentSummary(branch, environment, results);
     void buildDeploymentSummary(branch, environment, results);
+    return { environment, results };
   }
 
   private async dispatchOne(
@@ -274,7 +291,7 @@ export class DeployCommandHandler {
   ): Promise<{ result: PerRepositoryResult; tracked?: TrackedRun }> {
     const d = this.deps;
 
-    // Resolve workflow non-interactively (Req 13) — no mid-batch pickers.
+    // Resolve workflow non-interactively (Req 13) â€” no mid-batch pickers.
     const workflow = await d.resolveWorkflowNonInteractive({
       name: repo.name,
       rootPath: repo.rootPath,
