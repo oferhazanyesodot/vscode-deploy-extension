@@ -87,6 +87,17 @@ export class GhCliService {
     }
   }
 
+  // Return the repository's GitHub web URL (e.g. https://github.com/org/repo),
+  // or undefined if it cannot be determined.
+  async repoUrl(repoRoot: string): Promise<string | undefined> {
+    const r = await this.run(repoRoot, ["repo", "view", "--json", "url", "-q", ".url"], 15_000);
+    if (r.code !== 0) {
+      return undefined;
+    }
+    const url = r.stdout.trim();
+    return url.length > 0 ? url : undefined;
+  }
+
   async viewRun(repoRoot: string, runId: string): Promise<RunView | undefined> {
     const r = await this.run(repoRoot, [
       "run",

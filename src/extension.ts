@@ -13,9 +13,11 @@ import { RunTracker } from "./services/runTracker";
 import { ProfilePicker } from "./services/profilePicker";
 import { ManualProfileBuilder } from "./services/manualProfileBuilder";
 import { CheckboxStateStore } from "./services/checkboxStateStore";
-import { DeployProfilesTreeProvider, DeployTreeNode, ProfileNode } from "./services/deployProfilesTreeProvider";
+import { DeployProfilesTreeProvider, DeployTreeNode, ProfileNode, RepoCheckboxNode } from "./services/deployProfilesTreeProvider";
 import { eligibleTargets } from "./core/eligibleTargets";
 import { ProfileSelection } from "./core/profileTypes";
+import { branchUrl, comparePrUrl, branchLinksText, branchLinksMarkdown, ProfileBranchLink } from "./core/repoLinks";
+import { addExclusion, removeExclusion, stillExcludedByGlob } from "./core/exclusionToggle";
 import { MultiRunTracker, RepoPhase, TrackedRun } from "./services/multiRunTracker";
 import { DeployEnvironment, Cancelled, CANCELLED, RunPhase, WorkflowInputDef } from "./core/types";
 import { Profile, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
@@ -113,8 +115,8 @@ function buildDeps(services: {
         const running = phases
           .filter((p) => p.phase.kind !== "completed")
           .map((p) => p.repoName);
-        const detail = running.length > 0 ? ` â€” ${running.join(", ")}` : "";
-        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Â·  Click "Cancel deploy" to stop`);
+        const detail = running.length > 0 ? ` Ã¢â‚¬â€ ${running.join(", ")}` : "";
+        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Ã‚Â·  Click "Cancel deploy" to stop`);
         onUpdate(phases);
       };
       const cancelled = () => activeDeploy?.cts.token.isCancellationRequested ?? false;
@@ -278,6 +280,153 @@ export function activate(context: vscode.ExtensionContext): void {
     return { kind: "profile", name: node.profile.name, profileKind: node.profile.kind, candidates };
   };
 
+  // Resolve the GitHub web link for a single repo/branch target. Returns undefined
+  // when the repo root or its remote URL cannot be determined.
+  const linkForTarget = async (repoName: string, branch: string): Promise<ProfileBranchLink | undefined> => {
+    const repos = repoResolver.discoverRepos();
+    const repo = repos.find((r) => r.name === repoName);
+    const root = repo?.rootPath ?? treeProvider.branchInfoFor(repoName)?.rootPath;
+    if (!root) {
+      return undefined;
+    }
+    const url = await gh.repoUrl(root);
+    if (!url) {
+      return undefined;
+    }
+    return { repo: repoName, branch, url: branchUrl(url, branch) };
+  };
+
+  // Gather branch links for every eligible target in a profile.
+  const linksForProfile = async (node: ProfileNode): Promise<ProfileBranchLink[]> => {
+    const targets = eligibleTargets(node.profile, () => true, config.globalExclusions());
+    const links: ProfileBranchLink[] = [];
+    for (const t of targets) {
+      const link = await linkForTarget(t.repo, t.branch);
+      if (link) {
+        links.push(link);
+      }
+    }
+    return links;
+  };
+
+  const cmdCopyBranchLinks = vscode.commands.registerCommand("deploy.profiles.copyBranchLinks", async (node: ProfileNode) => {
+    const links = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Resolving branch links for "${node.profile.name}"...` },
+      () => linksForProfile(node)
+    );
+    if (links.length === 0) { void vscode.window.showWarningMessage(`No branch links could be resolved for "${node.profile.name}".`); return; }
+    await vscode.env.clipboard.writeText(branchLinksText(links));
+    void vscode.window.showInformationMessage(`Copied ${links.length} branch link(s) for "${node.profile.name}".`);
+  });
+
+  const cmdCopyMarkdown = vscode.commands.registerCommand("deploy.profiles.copyMarkdown", async (node: ProfileNode) => {
+    const links = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Building checklist for "${node.profile.name}"...` },
+      () => linksForProfile(node)
+    );
+    if (links.length === 0) { void vscode.window.showWarningMessage(`No branch links could be resolved for "${node.profile.name}".`); return; }
+    await vscode.env.clipboard.writeText(branchLinksMarkdown(node.profile.name, links));
+    void vscode.window.showInformationMessage(`Copied a Markdown checklist for "${node.profile.name}".`);
+  });
+
+  const cmdOpenBranches = vscode.commands.registerCommand("deploy.profiles.openBranches", async (node: ProfileNode) => {
+    const links = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Opening branches for "${node.profile.name}"...` },
+      () => linksForProfile(node)
+    );
+    if (links.length === 0) { void vscode.window.showWarningMessage(`No branch links could be resolved for "${node.profile.name}".`); return; }
+    for (const l of links) {
+      await vscode.env.openExternal(vscode.Uri.parse(l.url));
+    }
+  });
+
+  const cmdMassPr = vscode.commands.registerCommand("deploy.profiles.massPr", async (node: ProfileNode) => {
+    const base = await vscode.window.showInputBox({
+      title: `Open PRs for "${node.profile.name}"`,
+      prompt: "Base branch to open pull requests against (the branch you want to merge INTO)",
+      value: "dev",
+    });
+    if (!base) { return; }
+    const targets = eligibleTargets(node.profile, () => true, config.globalExclusions());
+    const opened: string[] = [];
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Opening PR pages (${base} \u2190 profile)...` },
+      async () => {
+        const repos = repoResolver.discoverRepos();
+        for (const t of targets) {
+          if (t.branch === base) { continue; } // no PR from a branch into itself
+          const repo = repos.find((r) => r.name === t.repo);
+          const root = repo?.rootPath ?? treeProvider.branchInfoFor(t.repo)?.rootPath;
+          if (!root) { continue; }
+          const url = await gh.repoUrl(root);
+          if (!url) { continue; }
+          await vscode.env.openExternal(vscode.Uri.parse(comparePrUrl(url, base, t.branch)));
+          opened.push(t.repo);
+        }
+      }
+    );
+    if (opened.length === 0) {
+      void vscode.window.showWarningMessage(`No PR pages were opened for "${node.profile.name}".`);
+    } else {
+      void vscode.window.showInformationMessage(`Opened ${opened.length} PR page(s) into "${base}".`);
+    }
+  });
+
+  // Repo-level: copy this branch's link.
+  const cmdRepoCopyLink = vscode.commands.registerCommand("deploy.repo.copyBranchLink", async (node: RepoCheckboxNode) => {
+    const link = await linkForTarget(node.target.repo, node.target.branch);
+    if (!link) { void vscode.window.showWarningMessage(`Could not resolve a link for ${node.target.repo}.`); return; }
+    await vscode.env.clipboard.writeText(link.url);
+    void vscode.window.showInformationMessage(`Copied link to ${node.target.repo} @ ${node.target.branch}.`);
+  });
+
+  // Repo-level: open this branch in the browser.
+  const cmdRepoOpenBranch = vscode.commands.registerCommand("deploy.repo.openBranch", async (node: RepoCheckboxNode) => {
+    const link = await linkForTarget(node.target.repo, node.target.branch);
+    if (!link) { void vscode.window.showWarningMessage(`Could not resolve a link for ${node.target.repo}.`); return; }
+    await vscode.env.openExternal(vscode.Uri.parse(link.url));
+  });
+
+  // Repo-level: open a PR page for this branch into a chosen base.
+  const cmdRepoOpenPr = vscode.commands.registerCommand("deploy.repo.openPr", async (node: RepoCheckboxNode) => {
+    const base = await vscode.window.showInputBox({
+      title: `Open PR for ${node.target.repo}`,
+      prompt: "Base branch to open the pull request against",
+      value: "dev",
+    });
+    if (!base) { return; }
+    const repos = repoResolver.discoverRepos();
+    const repo = repos.find((r) => r.name === node.target.repo);
+    const root = repo?.rootPath ?? treeProvider.branchInfoFor(node.target.repo)?.rootPath;
+    if (!root) { void vscode.window.showWarningMessage(`Could not resolve ${node.target.repo}.`); return; }
+    const url = await gh.repoUrl(root);
+    if (!url) { void vscode.window.showWarningMessage(`Could not resolve the GitHub URL for ${node.target.repo}.`); return; }
+    await vscode.env.openExternal(vscode.Uri.parse(comparePrUrl(url, base, node.target.branch)));
+  });
+
+  // Repo-level: add this repo to global exclusions.
+  const cmdRepoExclude = vscode.commands.registerCommand("deploy.repo.exclude", async (node: RepoCheckboxNode) => {
+    const next = addExclusion(config.globalExclusions(), node.target.repo);
+    await config.setGlobalExclusions(next);
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`${node.target.repo} is now globally excluded (never deployed or switched from this machine).`);
+  });
+
+  // Repo-level: remove this repo from global exclusions.
+  const cmdRepoInclude = vscode.commands.registerCommand("deploy.repo.include", async (node: RepoCheckboxNode) => {
+    const current = config.globalExclusions();
+    const next = removeExclusion(current, node.target.repo);
+    await config.setGlobalExclusions(next);
+    await treeProvider.refresh();
+    if (stillExcludedByGlob(current, node.target.repo)) {
+      void vscode.window.showWarningMessage(
+        `${node.target.repo} is still excluded by a glob pattern in deploy.globalExclusions. Edit settings to remove that pattern.`
+      );
+    } else {
+      void vscode.window.showInformationMessage(`${node.target.repo} is no longer globally excluded.`);
+    }
+  });
+
   const cmdTreeDeploy = vscode.commands.registerCommand("deploy.profiles.deploy", async (node: ProfileNode) => {
     if (activeDeploy) {
       void vscode.window.showWarningMessage("A profile deploy is already in progress. Cancel it first.");
@@ -334,7 +483,12 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage("Use the Deploy Profiles panel: expand a profile and click Switch.");
   });
 
-  context.subscriptions.push(deployCommand, switchCommand, treeView, cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh);
+  context.subscriptions.push(
+    deployCommand, switchCommand, treeView,
+    cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh,
+    cmdCopyBranchLinks, cmdCopyMarkdown, cmdOpenBranches, cmdMassPr,
+    cmdRepoCopyLink, cmdRepoOpenBranch, cmdRepoOpenPr, cmdRepoExclude, cmdRepoInclude
+  );
   if (checkboxSub) { context.subscriptions.push(checkboxSub); }
 }
 

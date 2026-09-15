@@ -53,7 +53,7 @@ export const workspace = {
   workspaceFolders: [] as unknown[],
 };
 export const commands = { registerCommand: () => ({ dispose() {} }) };
-export const env = { openExternal: async () => true };
+export const env = { openExternal: async () => true, clipboard: { writeText: async () => {}, readText: async () => "" } };
 export const Uri = { parse: (s: string) => ({ toString: () => s }) };
 export class ThemeIcon {
   constructor(public readonly id: string) {}

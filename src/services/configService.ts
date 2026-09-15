@@ -62,4 +62,11 @@ export class ConfigService {
     const next = { ...current, [name]: mapping };
     await vscode.workspace.getConfiguration("deploy").update("manualProfiles", next, this.target());
   }
+
+  async setGlobalExclusions(list: string[]): Promise<void> {
+    // globalExclusions is machine-scoped, so it must be written to the Global target.
+    await vscode.workspace
+      .getConfiguration("deploy")
+      .update("globalExclusions", list, vscode.ConfigurationTarget.Global);
+  }
 }

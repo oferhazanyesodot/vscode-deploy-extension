@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -55,6 +55,46 @@
         "command": "deploy.profiles.cancel",
         "title": "Cancel deploy",
         "icon": "$(stop-circle)"
+      },
+      {
+        "command": "deploy.profiles.copyBranchLinks",
+        "title": "Copy branch links",
+        "icon": "$(link)"
+      },
+      {
+        "command": "deploy.profiles.copyMarkdown",
+        "title": "Copy as Markdown checklist",
+        "icon": "$(markdown)"
+      },
+      {
+        "command": "deploy.profiles.openBranches",
+        "title": "Open all branches in browser",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "deploy.profiles.massPr",
+        "title": "Open PRs for all branches...",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "deploy.repo.copyBranchLink",
+        "title": "Copy branch link"
+      },
+      {
+        "command": "deploy.repo.openBranch",
+        "title": "Open branch in browser"
+      },
+      {
+        "command": "deploy.repo.openPr",
+        "title": "Open PR for this branch..."
+      },
+      {
+        "command": "deploy.repo.exclude",
+        "title": "Exclude from deploys (global)"
+      },
+      {
+        "command": "deploy.repo.include",
+        "title": "Include in deploys (remove global exclusion)"
       }
     ],
     "configuration": {
@@ -171,24 +211,69 @@
       ],
       "view/item/context": [
         {
-          "command": "deploy.profiles.deploy",
-          "when": "view == deployProfiles && viewItem =~ /^profile-/",
-          "group": "inline"
-        },
-        {
-          "command": "deploy.profiles.switch",
-          "when": "view == deployProfiles && viewItem =~ /^profile-/",
-          "group": "inline"
-        },
-        {
           "command": "deploy.profiles.hide",
           "when": "view == deployProfiles && (viewItem == 'profile-live' || viewItem == 'profile-env')",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "command": "deploy.profiles.unhide",
           "when": "view == deployProfiles && viewItem == 'profile-hidden'",
-          "group": "inline"
+          "group": "inline@1"
+        },
+        {
+          "command": "deploy.profiles.switch",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "inline@2"
+        },
+        {
+          "command": "deploy.profiles.deploy",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "inline@3"
+        },
+        {
+          "command": "deploy.profiles.copyBranchLinks",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "1_links@1"
+        },
+        {
+          "command": "deploy.profiles.openBranches",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "1_links@2"
+        },
+        {
+          "command": "deploy.profiles.copyMarkdown",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "1_links@3"
+        },
+        {
+          "command": "deploy.profiles.massPr",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "2_pr@1"
+        },
+        {
+          "command": "deploy.repo.copyBranchLink",
+          "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
+          "group": "1_links@1"
+        },
+        {
+          "command": "deploy.repo.openBranch",
+          "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
+          "group": "1_links@2"
+        },
+        {
+          "command": "deploy.repo.openPr",
+          "when": "view == deployProfiles && (viewItem == 'repo' || viewItem == 'repo-excluded')",
+          "group": "2_pr@1"
+        },
+        {
+          "command": "deploy.repo.exclude",
+          "when": "view == deployProfiles && viewItem == 'repo'",
+          "group": "3_exclusion@1"
+        },
+        {
+          "command": "deploy.repo.include",
+          "when": "view == deployProfiles && viewItem == 'repo-excluded'",
+          "group": "3_exclusion@1"
         }
       ]
     }
