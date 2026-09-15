@@ -20,30 +20,38 @@ describe("package.json contributions", () => {
 });
 
 describe("activation wiring (Req 1.1, 1.2)", () => {
-  it("registers deploy.run and profile.switch commands with status bar items", () => {
+  it("registers commands (including tree + cancel) without status bar items", () => {
     const registered: string[] = [];
-    const bars: { command: string; show: ReturnType<typeof vi.fn> }[] = [];
 
     (vscode.commands as unknown as { registerCommand: (id: string) => { dispose(): void } }).registerCommand =
       (id: string) => {
         registered.push(id);
         return { dispose() {} };
       };
-    (vscode.window as unknown as { createStatusBarItem: () => unknown }).createStatusBarItem = () => {
-      const bar = { text: "", command: "", tooltip: "", show: vi.fn(), dispose: vi.fn() };
-      bars.push(bar);
-      return bar;
-    };
 
     const subs: unknown[] = [];
-    activate({ subscriptions: subs } as unknown as import("vscode").ExtensionContext);
+    activate({
+      subscriptions: subs,
+      globalState: { get: () => undefined, update: () => Promise.resolve() },
+    } as unknown as import("vscode").ExtensionContext);
 
+    // Palette commands remain registered even though status bar items were removed.
     expect(registered).toContain("deploy.run");
     expect(registered).toContain("profile.switch");
-    const barCommands = bars.map((b) => b.command);
-    expect(barCommands).toContain("deploy.run");
-    expect(barCommands).toContain("profile.switch");
-    expect(bars.every((b) => b.show.mock.calls.length > 0)).toBe(true);
+    // Sidebar deploy/cancel wiring is present.
+    expect(registered).toContain("deploy.profiles.deploy");
+    expect(registered).toContain("deploy.profiles.cancel");
     expect(subs.length).toBeGreaterThanOrEqual(4);
+  });
+});
+
+describe("cancel command contribution", () => {
+  it("declares deploy.profiles.cancel and shows it in the view title when deploying", () => {
+    const commands = pkg.contributes.commands.map((c: { command: string }) => c.command);
+    expect(commands).toContain("deploy.profiles.cancel");
+    const titleMenus = pkg.contributes.menus["view/title"] as { command: string; when: string }[];
+    const cancelMenu = titleMenus.find((m) => m.command === "deploy.profiles.cancel");
+    expect(cancelMenu).toBeDefined();
+    expect(cancelMenu?.when).toContain("deploy.deploying");
   });
 });

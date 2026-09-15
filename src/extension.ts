@@ -15,13 +15,19 @@ import { ManualProfileBuilder } from "./services/manualProfileBuilder";
 import { CheckboxStateStore } from "./services/checkboxStateStore";
 import { DeployProfilesTreeProvider, DeployTreeNode, ProfileNode } from "./services/deployProfilesTreeProvider";
 import { eligibleTargets } from "./core/eligibleTargets";
-import { classifyProfile } from "./core/branchClassification";
 import { ProfileSelection } from "./core/profileTypes";
 import { MultiRunTracker, RepoPhase, TrackedRun } from "./services/multiRunTracker";
 import { DeployEnvironment, Cancelled, CANCELLED, RunPhase, WorkflowInputDef } from "./core/types";
 import { Profile, DirtyHandlingAction, PerRepositoryResult } from "./core/profileTypes";
 
 const ENVIRONMENTS: DeployEnvironment[] = ["dev", "preprod", "prod"];
+
+// Tracks the currently running profile deploy so the sidebar Cancel button can
+// abort it. Only one profile deploy runs at a time.
+interface ActiveDeploy {
+  cts: vscode.CancellationTokenSource;
+}
+let activeDeploy: ActiveDeploy | undefined;
 
 async function pickEnvironment(): Promise<DeployEnvironment | Cancelled> {
   const picked = await vscode.window.showQuickPick(
@@ -44,8 +50,9 @@ function buildDeps(services: {
   multiTracker: MultiRunTracker;
   notify: NotificationService;
   config: ConfigService;
+  setSidebarMessage: (msg: string | undefined) => void;
 }): Deps {
-  const { gh, git, repoResolver, workflowResolver, inputCollector, runTracker, multiTracker, notify, config } = services;
+  const { gh, git, repoResolver, workflowResolver, inputCollector, runTracker, multiTracker, notify, config, setSidebarMessage } = services;
   return {
     ghIsInstalled: () => gh.isInstalled(),
     ghIsAuthenticated: (root) => gh.isAuthenticated(root),
@@ -100,37 +107,20 @@ function buildDeps(services: {
     },
     trackMany: (runs: TrackedRun[], onUpdate: (phases: RepoPhase[]) => void) => {
       const interval = config.get().pollIntervalSeconds * 1000;
-      return Promise.resolve(vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Profile deploy...",
-          cancellable: true,
-        },
-        (progress, token) => {
-          const total = runs.length;
-          let lastDone = 0;
-          const report = (phases: RepoPhase[]) => {
-            const done = phases.filter((p) => p.phase.kind === "completed").length;
-            const lines = phases
-              .map((p) => {
-                if (p.phase.kind === "completed") {
-                  return `${p.repoName}: ${p.phase.conclusion}`;
-                }
-                if (p.phase.kind === "waiting-approval") {
-                  return `${p.repoName}: waiting approval`;
-                }
-                const pct = p.progress ? ` ${p.progress.percent}%` : "";
-                return `${p.repoName}: running${pct}`;
-              })
-              .join(" | ");
-            const increment = total > 0 ? ((done - lastDone) / total) * 100 : 0;
-            lastDone = done;
-            progress.report({ message: lines, increment });
-            onUpdate(phases);
-          };
-          return multiTracker.track(runs, interval, report, () => token.isCancellationRequested);
-        }
-      ));
+      const total = runs.length;
+      const report = (phases: RepoPhase[]) => {
+        const done = phases.filter((p) => p.phase.kind === "completed").length;
+        const running = phases
+          .filter((p) => p.phase.kind !== "completed")
+          .map((p) => p.repoName);
+        const detail = running.length > 0 ? ` â€” ${running.join(", ")}` : "";
+        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Â·  Click "Cancel deploy" to stop`);
+        onUpdate(phases);
+      };
+      const cancelled = () => activeDeploy?.cts.token.isCancellationRequested ?? false;
+      return multiTracker.track(runs, interval, report, cancelled).finally(() => {
+        setSidebarMessage(undefined);
+      });
     },
     deployOrder: () => config.deployOrder(),
     activeFilePath: () => vscode.window.activeTextEditor?.document.uri.fsPath,
@@ -230,14 +220,6 @@ export function activate(context: vscode.ExtensionContext): void {
   const runTracker = new RunTracker(gh);
   const multiTracker = new MultiRunTracker(gh);
 
-  const deps = buildDeps({
-    gh, git, repoResolver, workflowResolver, inputCollector, runTracker, multiTracker, notify, config,
-  });
-  const handler = new DeployCommandHandler(deps);
-
-  const switchDeps = buildSwitchDeps({ git, repoResolver, notify, config, picker: profilePicker });
-  const switchHandler = new SwitchProfileHandler(switchDeps);
-
   // Capability C: Deploy Profiles tree view
   const checkboxes = new CheckboxStateStore(context.globalState);
   const treeProvider = new DeployProfilesTreeProvider({
@@ -252,6 +234,24 @@ export function activate(context: vscode.ExtensionContext): void {
     showCollapseAll: true,
     manageCheckboxStateManually: true,
   } as unknown as vscode.TreeViewOptions<DeployTreeNode>);
+
+  // Sidebar progress: update the tree view's header message during a profile deploy.
+  const setSidebarMessage = (msg: string | undefined): void => {
+    try {
+      (treeView as unknown as { message?: string }).message = msg;
+    } catch {
+      // message not supported by the host; ignore.
+    }
+  };
+
+  const deps = buildDeps({
+    gh, git, repoResolver, workflowResolver, inputCollector, runTracker, multiTracker, notify, config, setSidebarMessage,
+  });
+  const handler = new DeployCommandHandler(deps);
+
+  const switchDeps = buildSwitchDeps({ git, repoResolver, notify, config, picker: profilePicker });
+  const switchHandler = new SwitchProfileHandler(switchDeps);
+
   const checkboxSub = (treeView as unknown as {
     onDidChangeCheckboxState?: (h: (e: { items: ReadonlyArray<[DeployTreeNode, vscode.TreeItemCheckboxState]> }) => void) => vscode.Disposable;
   }).onDidChangeCheckboxState?.((e) => void treeProvider.handleCheckboxChange(e.items));
@@ -261,20 +261,49 @@ export function activate(context: vscode.ExtensionContext): void {
     if (targets.length === 0) {
       return undefined;
     }
-    const restricted = { ...node.profile, targets };
-    const branchInfo = new Map();
-    for (const t of targets) {
+    // Map each eligible target directly to a candidate. Do NOT re-run classifyProfile
+    // here: targets already represent real repos, dispatch uses branch-as-ref regardless
+    // of location, and re-classifying could drop repos missing from the branch cache.
+    const repos = repoResolver.discoverRepos();
+    const candidates = targets.map((t) => {
+      const repo = repos.find((rr) => rr.name === t.repo);
       const info = treeProvider.branchInfoFor(t.repo);
-      if (info) branchInfo.set(t.repo, info);
-    }
-    const candidates = classifyProfile(restricted, branchInfo);
+      return {
+        name: t.repo,
+        rootPath: repo?.rootPath ?? info?.rootPath ?? "",
+        branch: t.branch,
+        location: "both" as const,
+      };
+    });
     return { kind: "profile", name: node.profile.name, profileKind: node.profile.kind, candidates };
   };
 
   const cmdTreeDeploy = vscode.commands.registerCommand("deploy.profiles.deploy", async (node: ProfileNode) => {
+    if (activeDeploy) {
+      void vscode.window.showWarningMessage("A profile deploy is already in progress. Cancel it first.");
+      return;
+    }
     const selection = buildSelection(node);
     if (!selection) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to deploy.`); return; }
-    await handler.executeProfileDeploy(selection);
+    activeDeploy = { cts: new vscode.CancellationTokenSource() };
+    void vscode.commands.executeCommand("setContext", "deploy.deploying", true);
+    setSidebarMessage(`$(sync~spin) Preparing deploy for "${node.profile.name}"...`);
+    try {
+      await handler.executeProfileDeploy(selection);
+    } finally {
+      activeDeploy.cts.dispose();
+      activeDeploy = undefined;
+      void vscode.commands.executeCommand("setContext", "deploy.deploying", false);
+      setSidebarMessage(undefined);
+    }
+  });
+  const cmdTreeCancel = vscode.commands.registerCommand("deploy.profiles.cancel", () => {
+    if (!activeDeploy) {
+      void vscode.window.showInformationMessage("No deploy is currently running.");
+      return;
+    }
+    activeDeploy.cts.cancel();
+    setSidebarMessage("$(stop) Cancelling deploy...");
   });
   const cmdTreeSwitch = vscode.commands.registerCommand("deploy.profiles.switch", async (node: ProfileNode) => {
     const targets = eligibleTargets(node.profile, (repo) => checkboxes.isChecked(node.profile.name, repo), config.globalExclusions());
@@ -305,19 +334,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showInformationMessage("Use the Deploy Profiles panel: expand a profile and click Switch.");
   });
 
-  const deployStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  deployStatus.text = "$(rocket) Deploy";
-  deployStatus.tooltip = "Run a deployment";
-  deployStatus.command = "deploy.run";
-  deployStatus.show();
-
-  const switchStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-  switchStatus.text = "$(git-branch) Profile";
-  switchStatus.tooltip = "Switch all repos to a profile branch";
-  switchStatus.command = "profile.switch";
-  switchStatus.show();
-
-  context.subscriptions.push(deployCommand, switchCommand, deployStatus, switchStatus, treeView, cmdTreeDeploy, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh);
+  context.subscriptions.push(deployCommand, switchCommand, treeView, cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh);
   if (checkboxSub) { context.subscriptions.push(checkboxSub); }
 }
 

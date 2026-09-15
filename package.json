@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -50,6 +50,11 @@
         "command": "deploy.profiles.refresh",
         "title": "Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "deploy.profiles.cancel",
+        "title": "Cancel deploy",
+        "icon": "$(stop-circle)"
       }
     ],
     "configuration": {
@@ -149,14 +154,19 @@
     "menus": {
       "view/title": [
         {
+          "command": "deploy.profiles.cancel",
+          "when": "view == deployProfiles && deploy.deploying",
+          "group": "navigation@0"
+        },
+        {
           "command": "deploy.profiles.addManual",
           "when": "view == deployProfiles",
-          "group": "navigation"
+          "group": "navigation@1"
         },
         {
           "command": "deploy.profiles.refresh",
           "when": "view == deployProfiles",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
