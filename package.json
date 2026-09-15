@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -109,6 +109,16 @@
         "command": "deploy.profiles.removeManual",
         "title": "Remove manual profile",
         "icon": "$(trash)"
+      },
+      {
+        "command": "deploy.profiles.star",
+        "title": "Star (pin to top)",
+        "icon": "$(star-empty)"
+      },
+      {
+        "command": "deploy.profiles.unstar",
+        "title": "Unstar",
+        "icon": "$(star-full)"
       }
     ],
     "configuration": {
@@ -193,6 +203,14 @@
             "type": "string"
           },
           "description": "Visual-only display names for profiles: map of real profile/branch name to the label shown in the Deploy Profiles panel. Does not change the actual branch or profile used for deploy or switch."
+        },
+        "deploy.starredProfiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Profile names starred/pinned to the top of the Deploy Profiles panel. The star toggle updates this."
         }
       }
     },
@@ -233,8 +251,18 @@
       ],
       "view/item/context": [
         {
+          "command": "deploy.profiles.star",
+          "when": "view == deployProfiles && viewItem =~ /-unstarred$/ && !(viewItem =~ /^profile-hidden/)",
+          "group": "inline@0"
+        },
+        {
+          "command": "deploy.profiles.unstar",
+          "when": "view == deployProfiles && viewItem =~ /-starred$/",
+          "group": "inline@0"
+        },
+        {
           "command": "deploy.profiles.hide",
-          "when": "view == deployProfiles && (viewItem =~ /^profile-live/ || viewItem =~ /^profile-env/)",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/ && !(viewItem =~ /^profile-hidden/)",
           "group": "inline@1"
         },
         {
@@ -253,6 +281,16 @@
           "group": "inline@3"
         },
         {
+          "command": "deploy.profiles.star",
+          "when": "view == deployProfiles && viewItem =~ /-unstarred$/ && !(viewItem =~ /^profile-hidden/)",
+          "group": "0_profile@0"
+        },
+        {
+          "command": "deploy.profiles.unstar",
+          "when": "view == deployProfiles && viewItem =~ /-starred$/",
+          "group": "0_profile@0"
+        },
+        {
           "command": "deploy.profiles.rename",
           "when": "view == deployProfiles && viewItem =~ /^profile-/",
           "group": "0_profile@1"
@@ -264,7 +302,7 @@
         },
         {
           "command": "deploy.profiles.removeManual",
-          "when": "view == deployProfiles && viewItem =~ /-manual$/",
+          "when": "view == deployProfiles && viewItem =~ /-manual-/",
           "group": "0_profile@3"
         },
         {

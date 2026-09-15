@@ -10,7 +10,7 @@ import { GitService } from "./gitService";
 import { ConfigService } from "./configService";
 import { CheckboxStateStore } from "./checkboxStateStore";
 
-type GroupKind = "live" | "environment" | "hidden";
+type GroupKind = "starred" | "live" | "manual" | "environment" | "hidden";
 
 export interface GroupNode {
   kind: "group";
@@ -22,6 +22,7 @@ export interface ProfileNode {
   profile: Profile;
   group: GroupKind;
   allExcluded: boolean;
+  starred: boolean;
 }
 export interface RepoCheckboxNode {
   kind: "repo";
@@ -32,8 +33,12 @@ export interface RepoCheckboxNode {
 }
 export type DeployTreeNode = GroupNode | ProfileNode | RepoCheckboxNode;
 
+const GROUP_ORDER: GroupKind[] = ["starred", "live", "manual", "environment", "hidden"];
+
 const GROUP_LABELS: Record<GroupKind, string> = {
+  starred: "Starred profiles",
   live: "Live profiles",
+  manual: "Manual profiles",
   environment: "Environment profiles",
   hidden: "Hidden profiles",
 };
@@ -42,10 +47,11 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<DeployTreeNode | undefined>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-  private sections: ProfileSections = { live: [], environment: [], hidden: [] };
+  private sections: ProfileSections = { starred: [], live: [], manual: [], environment: [], hidden: [] };
   private branchInfo = new Map<string, RepoBranchInfo>();
   private globalExclusions: string[] = [];
   private aliases: Record<string, string> = {};
+  private starred = new Set<string>();
 
   constructor(
     private readonly deps: {
@@ -77,7 +83,9 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     }));
     const manual = manualProfilesFromConfig(this.deps.config.manualProfiles());
     const all = assembleProfiles(autoProfiles, manual);
-    this.sections = buildProfileSections(all, this.deps.config.hiddenProfiles());
+    const starredNames = this.deps.config.starredProfiles();
+    this.starred = new Set(starredNames);
+    this.sections = buildProfileSections(all, this.deps.config.hiddenProfiles(), starredNames);
     this.globalExclusions = this.deps.config.globalExclusions();
     this.aliases = this.deps.config.profileAliases();
     this._onDidChangeTreeData.fire(undefined);
@@ -93,7 +101,9 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
 
   getChildren(node?: DeployTreeNode): DeployTreeNode[] {
     if (!node) {
-      return (["live", "environment", "hidden"] as GroupKind[]).map((group) => ({
+      // Only show sections that have at least one profile, so empty sections
+      // (e.g. no starred yet) don't clutter the tree.
+      return GROUP_ORDER.filter((group) => this.profilesFor(group).length > 0).map((group) => ({
         kind: "group",
         group,
         label: GROUP_LABELS[group],
@@ -105,6 +115,7 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
         profile,
         group: node.group,
         allExcluded: this.allExcluded(profile),
+        starred: this.starred.has(profile.name),
       }));
     }
     if (node.kind === "profile") {
@@ -124,13 +135,19 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     if (node.kind === "group") {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
       item.contextValue = "group";
-      // Distinct icon per section so the three groups read apart at a glance.
+      // Distinct icon per section so the groups read apart at a glance.
       const groupIcon: Record<GroupKind, string> = {
+        starred: "star-full",
         live: "rocket",
+        manual: "list-selection",
         environment: "server-environment",
         hidden: "eye-closed",
       };
-      item.iconPath = new vscode.ThemeIcon(groupIcon[node.group]);
+      const starColor = new vscode.ThemeColor("charts.yellow");
+      item.iconPath =
+        node.group === "starred"
+          ? new vscode.ThemeIcon("star-full", starColor)
+          : new vscode.ThemeIcon(groupIcon[node.group]);
       return item;
     }
     if (node.kind === "profile") {
@@ -146,29 +163,47 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
       if (node.allExcluded) tags.push("(all excluded)");
       item.description = tags.join("  ");
 
-      // Icon + color per group, with a distinct look for manual profiles.
-      // Environment profiles get a themed color to stand out from feature branches.
+      // Icon + color per group, with a distinct look for manual and starred profiles.
       let iconId: string;
       let color: vscode.ThemeColor | undefined;
-      if (node.group === "hidden") {
+      if (node.starred) {
+        // Starred profiles always show a filled yellow star, wherever they sit.
+        iconId = "star-full";
+        color = new vscode.ThemeColor("charts.yellow");
+      } else if (node.group === "hidden") {
         iconId = manual ? "list-unordered" : "git-branch";
       } else if (node.group === "environment") {
         iconId = "globe";
         color = new vscode.ThemeColor("charts.blue");
+      } else if (manual) {
+        iconId = "list-selection";
+        color = new vscode.ThemeColor("charts.purple");
       } else {
         // live
-        iconId = manual ? "list-selection" : "git-branch";
-        color = manual ? new vscode.ThemeColor("charts.purple") : new vscode.ThemeColor("charts.green");
+        iconId = "git-branch";
+        color = new vscode.ThemeColor("charts.green");
       }
       item.iconPath = color ? new vscode.ThemeIcon(iconId, color) : new vscode.ThemeIcon(iconId);
 
+      // contextValue carries: base group, manual flag, star state â€” so menu
+      // when-clauses can show the right inline/context actions.
+      // Examples: "profile-live-manual-unstarred", "profile-env-starred".
+      const base =
+        node.group === "hidden"
+          ? "profile-hidden"
+          : node.group === "environment"
+          ? "profile-env"
+          : node.group === "starred"
+          ? "profile-starred-group"
+          : node.group === "manual"
+          ? "profile-manualgroup"
+          : "profile-live";
       const kindTag = manual ? "-manual" : "";
-      item.contextValue =
-        (node.group === "hidden" ? "profile-hidden" : node.group === "environment" ? "profile-env" : "profile-live") +
-        kindTag;
+      const starTag = node.starred ? "-starred" : "-unstarred";
+      item.contextValue = base + kindTag + starTag;
 
       const aliasNote = alias ? ` (shown as "${alias}")` : "";
-      item.tooltip = `${node.profile.name}${aliasNote} â€” ${node.profile.targets.length} repo(s)${manual ? ", manual profile" : ""}`;
+      item.tooltip = `${node.profile.name}${aliasNote} â€” ${node.profile.targets.length} repo(s)${manual ? ", manual profile" : ""}${node.starred ? ", starred" : ""}`;
       return item;
     }
     // repo checkbox node

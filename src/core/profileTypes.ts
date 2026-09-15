@@ -49,7 +49,9 @@ export const ENVIRONMENT_PROFILE_NAMES = [
 export type ProfileGroup = "live" | "environment";
 
 export interface ProfileSections {
+  starred: Profile[];
   live: Profile[];
+  manual: Profile[];
   environment: Profile[];
   hidden: Profile[];
 }

@@ -115,8 +115,8 @@ function buildDeps(services: {
         const running = phases
           .filter((p) => p.phase.kind !== "completed")
           .map((p) => p.repoName);
-        const detail = running.length > 0 ? ` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${running.join(", ")}` : "";
-        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Ãƒâ€šÃ‚Â·  Click "Cancel deploy" to stop`);
+        const detail = running.length > 0 ? ` ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${running.join(", ")}` : "";
+        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â·  Click "Cancel deploy" to stop`);
         onUpdate(phases);
       };
       const cancelled = () => activeDeploy?.cts.token.isCancellationRequested ?? false;
@@ -497,6 +497,16 @@ export function activate(context: vscode.ExtensionContext): void {
     await treeProvider.refresh();
     void vscode.window.showInformationMessage(`Removed manual profile "${node.profile.name}".`);
   });
+  const cmdStar = vscode.commands.registerCommand("deploy.profiles.star", async (node: ProfileNode) => {
+    const { toggleStarred } = await import("./core/profileGrouping");
+    await config.setStarredProfiles(toggleStarred(config.starredProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
+  const cmdUnstar = vscode.commands.registerCommand("deploy.profiles.unstar", async (node: ProfileNode) => {
+    const { toggleStarred } = await import("./core/profileGrouping");
+    await config.setStarredProfiles(toggleStarred(config.starredProfiles(), node.profile.name));
+    await treeProvider.refresh();
+  });
   const cmdTreeHide = vscode.commands.registerCommand("deploy.profiles.hide", async (node: ProfileNode) => {
     const { toggleHidden } = await import("./core/profileGrouping");
     await config.setHiddenProfiles(toggleHidden(config.hiddenProfiles(), node.profile.name));
@@ -524,7 +534,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     deployCommand, switchCommand, treeView,
     cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh,
-    cmdRename, cmdClearAlias, cmdRemoveManual,
+    cmdRename, cmdClearAlias, cmdRemoveManual, cmdStar, cmdUnstar,
     cmdCopyBranchLinks, cmdCopyMarkdown, cmdOpenBranches, cmdMassPr,
     cmdRepoCopyLink, cmdRepoOpenBranch, cmdRepoOpenPr, cmdRepoExclude, cmdRepoInclude
   );

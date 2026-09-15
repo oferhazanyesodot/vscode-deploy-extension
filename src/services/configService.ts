@@ -15,6 +15,7 @@ export class ConfigService {
       manualProfiles: cfg.get("manualProfiles"),
       globalExclusions: cfg.get("globalExclusions"),
       profileAliases: cfg.get("profileAliases"),
+      starredProfiles: cfg.get("starredProfiles"),
     });
   }
 
@@ -51,6 +52,10 @@ export class ConfigService {
     return this.get().profileAliases;
   }
 
+  starredProfiles(): string[] {
+    return this.get().starredProfiles;
+  }
+
   private target(): vscode.ConfigurationTarget {
     const folders = vscode.workspace.workspaceFolders;
     return folders && folders.length > 0
@@ -60,6 +65,10 @@ export class ConfigService {
 
   async setHiddenProfiles(list: string[]): Promise<void> {
     await vscode.workspace.getConfiguration("deploy").update("hiddenProfiles", list, this.target());
+  }
+
+  async setStarredProfiles(list: string[]): Promise<void> {
+    await vscode.workspace.getConfiguration("deploy").update("starredProfiles", list, this.target());
   }
 
   async setManualProfile(name: string, mapping: Record<string, string>): Promise<void> {

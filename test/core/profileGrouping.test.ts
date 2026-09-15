@@ -31,30 +31,61 @@ describe("classifyProfileGroup", () => {
 });
 
 describe("buildProfileSections", () => {
+  const isEnv = (n: string) => (ENVIRONMENT_PROFILE_NAMES as readonly string[]).includes(n);
+
   // Feature: profile-deploy, Property 15: Profile sections group, cover, and order profiles correctly
-  it("Property 15: disjoint, covering, ordered, hidden by name", () => {
+  it("Property 15: disjoint, covering, ordered, with hidden>starred>manual>environment>live precedence", () => {
     fc.assert(
       fc.property(
-        fc.uniqueArray(profileArb(), { maxLength: 10, selector: (p) => p.name + p.kind }),
+        fc.uniqueArray(profileArb(), { maxLength: 12, selector: (p) => p.name + p.kind }),
         fc.array(fc.string(), { maxLength: 5 }),
-        (profiles, hidden) => {
+        fc.array(fc.string(), { maxLength: 5 }),
+        (profiles, hidden, starred) => {
           const hiddenSet = new Set(hidden);
-          const sections = buildProfileSections(profiles, hidden);
-          const all = [...sections.live, ...sections.environment, ...sections.hidden];
-          // covering + disjoint (by identity)
+          const starredSet = new Set(starred);
+          const sections = buildProfileSections(profiles, hidden, starred);
+          const all = [
+            ...sections.starred,
+            ...sections.live,
+            ...sections.manual,
+            ...sections.environment,
+            ...sections.hidden,
+          ];
+          // covering + disjoint (by identity): every input profile lands in exactly one section
           expect(all.length).toBe(profiles.length);
-          // hidden membership
+
+          // hidden wins over everything
           for (const p of sections.hidden) expect(hiddenSet.has(p.name)).toBe(true);
-          for (const p of sections.live) {
+          // starred: not hidden, but starred
+          for (const p of sections.starred) {
             expect(hiddenSet.has(p.name)).toBe(false);
-            expect((ENVIRONMENT_PROFILE_NAMES as readonly string[]).includes(p.name)).toBe(false);
+            expect(starredSet.has(p.name)).toBe(true);
           }
+          // manual: not hidden, not starred, manual kind
+          for (const p of sections.manual) {
+            expect(hiddenSet.has(p.name)).toBe(false);
+            expect(starredSet.has(p.name)).toBe(false);
+            expect(p.kind).toBe("manual");
+          }
+          // environment: not hidden/starred, auto kind, env name
           for (const p of sections.environment) {
             expect(hiddenSet.has(p.name)).toBe(false);
-            expect((ENVIRONMENT_PROFILE_NAMES as readonly string[]).includes(p.name)).toBe(true);
+            expect(starredSet.has(p.name)).toBe(false);
+            expect(p.kind).not.toBe("manual");
+            expect(isEnv(p.name)).toBe(true);
           }
+          // live: not hidden/starred, auto kind, non-env name
+          for (const p of sections.live) {
+            expect(hiddenSet.has(p.name)).toBe(false);
+            expect(starredSet.has(p.name)).toBe(false);
+            expect(p.kind).not.toBe("manual");
+            expect(isEnv(p.name)).toBe(false);
+          }
+
           // order preservation within live
-          const liveFromInput = profiles.filter((p) => !hiddenSet.has(p.name) && !(ENVIRONMENT_PROFILE_NAMES as readonly string[]).includes(p.name));
+          const liveFromInput = profiles.filter(
+            (p) => !hiddenSet.has(p.name) && !starredSet.has(p.name) && p.kind !== "manual" && !isEnv(p.name)
+          );
           expect(sections.live).toEqual(liveFromInput);
         }
       ),

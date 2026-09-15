@@ -77,7 +77,9 @@ export class ProfilePicker {
         }
       };
 
+      pushProfiles("Starred profiles", sections.starred, false);
       pushProfiles("Live profiles", sections.live, false);
+      pushProfiles("Manual profiles", sections.manual, false);
       pushProfiles("Environment profiles", sections.environment, false);
       pushProfiles("Hidden profiles", sections.hidden, true);
 
