@@ -55,8 +55,11 @@ export const workspace = {
 export const commands = { registerCommand: () => ({ dispose() {} }) };
 export const env = { openExternal: async () => true, clipboard: { writeText: async () => {}, readText: async () => "" } };
 export const Uri = { parse: (s: string) => ({ toString: () => s }) };
-export class ThemeIcon {
+export class ThemeColor {
   constructor(public readonly id: string) {}
+}
+export class ThemeIcon {
+  constructor(public readonly id: string, public readonly color?: ThemeColor) {}
 }
 export enum StatusBarAlignment { Left = 1, Right = 2 }
 export enum ProgressLocation { Notification = 15 }

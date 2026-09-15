@@ -2,7 +2,7 @@
   "name": "vscode-deploy-extension",
   "displayName": "Deploy",
   "description": "Trigger GitHub Actions deploy workflows from VS Code via the gh CLI.",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "ofer",
   "engines": {
     "vscode": "^1.85.0"
@@ -95,6 +95,20 @@
       {
         "command": "deploy.repo.include",
         "title": "Include in deploys (remove global exclusion)"
+      },
+      {
+        "command": "deploy.profiles.rename",
+        "title": "Rename (display only)...",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "deploy.profiles.clearAlias",
+        "title": "Clear display name"
+      },
+      {
+        "command": "deploy.profiles.removeManual",
+        "title": "Remove manual profile",
+        "icon": "$(trash)"
       }
     ],
     "configuration": {
@@ -171,6 +185,14 @@
           "default": [],
           "scope": "machine",
           "description": "Glob patterns (supporting *) matched against repository names. Matching repos are never deployed or switched from this machine."
+        },
+        "deploy.profileAliases": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Visual-only display names for profiles: map of real profile/branch name to the label shown in the Deploy Profiles panel. Does not change the actual branch or profile used for deploy or switch."
         }
       }
     },
@@ -212,12 +234,12 @@
       "view/item/context": [
         {
           "command": "deploy.profiles.hide",
-          "when": "view == deployProfiles && (viewItem == 'profile-live' || viewItem == 'profile-env')",
+          "when": "view == deployProfiles && (viewItem =~ /^profile-live/ || viewItem =~ /^profile-env/)",
           "group": "inline@1"
         },
         {
           "command": "deploy.profiles.unhide",
-          "when": "view == deployProfiles && viewItem == 'profile-hidden'",
+          "when": "view == deployProfiles && viewItem =~ /^profile-hidden/",
           "group": "inline@1"
         },
         {
@@ -229,6 +251,21 @@
           "command": "deploy.profiles.deploy",
           "when": "view == deployProfiles && viewItem =~ /^profile-/",
           "group": "inline@3"
+        },
+        {
+          "command": "deploy.profiles.rename",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "0_profile@1"
+        },
+        {
+          "command": "deploy.profiles.clearAlias",
+          "when": "view == deployProfiles && viewItem =~ /^profile-/",
+          "group": "0_profile@2"
+        },
+        {
+          "command": "deploy.profiles.removeManual",
+          "when": "view == deployProfiles && viewItem =~ /-manual$/",
+          "group": "0_profile@3"
         },
         {
           "command": "deploy.profiles.copyBranchLinks",

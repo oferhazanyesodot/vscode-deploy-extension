@@ -23,6 +23,7 @@ export function normalizeConfig(raw: {
   hiddenProfiles?: unknown;
   manualProfiles?: unknown;
   globalExclusions?: unknown;
+  profileAliases?: unknown;
 }): DeployConfig {
   const mapping: Record<string, string> = {};
   if (raw.workflowMapping && typeof raw.workflowMapping === "object") {
@@ -67,6 +68,15 @@ export function normalizeConfig(raw: {
     }
   }
 
+  const profileAliases: Record<string, string> = {};
+  if (raw.profileAliases && typeof raw.profileAliases === "object" && !Array.isArray(raw.profileAliases)) {
+    for (const [name, alias] of Object.entries(raw.profileAliases as Record<string, unknown>)) {
+      if (typeof alias === "string" && alias.trim() !== "") {
+        profileAliases[name] = alias;
+      }
+    }
+  }
+
   return {
     workflowMapping: mapping,
     pollIntervalSeconds: clampInterval(raw.pollIntervalSeconds),
@@ -78,5 +88,6 @@ export function normalizeConfig(raw: {
     globalExclusions: Array.isArray(raw.globalExclusions)
       ? raw.globalExclusions.filter((x): x is string => typeof x === "string")
       : [],
+    profileAliases,
   };
 }

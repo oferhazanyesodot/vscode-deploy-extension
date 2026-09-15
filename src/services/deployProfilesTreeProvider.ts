@@ -45,6 +45,7 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
   private sections: ProfileSections = { live: [], environment: [], hidden: [] };
   private branchInfo = new Map<string, RepoBranchInfo>();
   private globalExclusions: string[] = [];
+  private aliases: Record<string, string> = {};
 
   constructor(
     private readonly deps: {
@@ -78,6 +79,7 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     const all = assembleProfiles(autoProfiles, manual);
     this.sections = buildProfileSections(all, this.deps.config.hiddenProfiles());
     this.globalExclusions = this.deps.config.globalExclusions();
+    this.aliases = this.deps.config.profileAliases();
     this._onDidChangeTreeData.fire(undefined);
   }
 
@@ -122,17 +124,51 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     if (node.kind === "group") {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
       item.contextValue = "group";
+      // Distinct icon per section so the three groups read apart at a glance.
+      const groupIcon: Record<GroupKind, string> = {
+        live: "rocket",
+        environment: "server-environment",
+        hidden: "eye-closed",
+      };
+      item.iconPath = new vscode.ThemeIcon(groupIcon[node.group]);
       return item;
     }
     if (node.kind === "profile") {
       const manual = node.profile.kind === "manual";
-      const item = new vscode.TreeItem(node.profile.name, vscode.TreeItemCollapsibleState.Collapsed);
+      const alias = this.aliases[node.profile.name];
+      const label = alias ?? node.profile.name;
+      const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.Collapsed);
+
       const tags: string[] = [];
+      // When aliased, show the real profile/branch name so it is never hidden.
+      if (alias) tags.push(node.profile.name);
       if (manual) tags.push("(manual)");
       if (node.allExcluded) tags.push("(all excluded)");
-      item.description = tags.join(" ");
+      item.description = tags.join("  ");
+
+      // Icon + color per group, with a distinct look for manual profiles.
+      // Environment profiles get a themed color to stand out from feature branches.
+      let iconId: string;
+      let color: vscode.ThemeColor | undefined;
+      if (node.group === "hidden") {
+        iconId = manual ? "list-unordered" : "git-branch";
+      } else if (node.group === "environment") {
+        iconId = "globe";
+        color = new vscode.ThemeColor("charts.blue");
+      } else {
+        // live
+        iconId = manual ? "list-selection" : "git-branch";
+        color = manual ? new vscode.ThemeColor("charts.purple") : new vscode.ThemeColor("charts.green");
+      }
+      item.iconPath = color ? new vscode.ThemeIcon(iconId, color) : new vscode.ThemeIcon(iconId);
+
+      const kindTag = manual ? "-manual" : "";
       item.contextValue =
-        node.group === "hidden" ? "profile-hidden" : node.group === "environment" ? "profile-env" : "profile-live";
+        (node.group === "hidden" ? "profile-hidden" : node.group === "environment" ? "profile-env" : "profile-live") +
+        kindTag;
+
+      const aliasNote = alias ? ` (shown as "${alias}")` : "";
+      item.tooltip = `${node.profile.name}${aliasNote} â€” ${node.profile.targets.length} repo(s)${manual ? ", manual profile" : ""}`;
       return item;
     }
     // repo checkbox node
@@ -140,10 +176,12 @@ export class DeployProfilesTreeProvider implements vscode.TreeDataProvider<Deplo
     if (node.globallyExcluded) {
       item.description = `${node.target.branch} [${node.location}] (excluded)`;
       item.contextValue = "repo-excluded";
+      item.iconPath = new vscode.ThemeIcon("circle-slash", new vscode.ThemeColor("disabledForeground"));
       // no checkboxState -> not toggleable
     } else {
       item.description = `${node.target.branch} [${node.location}]`;
       item.contextValue = "repo";
+      item.iconPath = new vscode.ThemeIcon("repo");
       const checked = this.deps.checkboxes.isChecked(node.profileName, node.target.repo);
       item.checkboxState = checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
     }

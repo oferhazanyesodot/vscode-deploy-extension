@@ -115,8 +115,8 @@ function buildDeps(services: {
         const running = phases
           .filter((p) => p.phase.kind !== "completed")
           .map((p) => p.repoName);
-        const detail = running.length > 0 ? ` Ã¢â‚¬â€ ${running.join(", ")}` : "";
-        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Ã‚Â·  Click "Cancel deploy" to stop`);
+        const detail = running.length > 0 ? ` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â ${running.join(", ")}` : "";
+        setSidebarMessage(`$(sync~spin) Deploying ${done}/${total}${detail}  Ãƒâ€šÃ‚Â·  Click "Cancel deploy" to stop`);
         onUpdate(phases);
       };
       const cancelled = () => activeDeploy?.cts.token.isCancellationRequested ?? false;
@@ -459,6 +459,44 @@ export function activate(context: vscode.ExtensionContext): void {
     if (targets.length === 0) { void vscode.window.showInformationMessage(`Profile "${node.profile.name}" has no eligible repositories to switch.`); return; }
     await switchHandler.runForProfile({ ...node.profile, targets });
   });
+  const cmdRename = vscode.commands.registerCommand("deploy.profiles.rename", async (node: ProfileNode) => {
+    const currentAlias = config.profileAliases()[node.profile.name];
+    const value = await vscode.window.showInputBox({
+      title: `Rename "${node.profile.name}" (display only)`,
+      prompt: "This changes only how the profile is shown. The real profile/branch name is unchanged. Leave empty to clear.",
+      value: currentAlias ?? "",
+    });
+    if (value === undefined) { return; } // cancelled
+    await config.setProfileAlias(node.profile.name, value);
+    await treeProvider.refresh();
+    if (value.trim() === "") {
+      void vscode.window.showInformationMessage(`Cleared display name for "${node.profile.name}".`);
+    } else {
+      void vscode.window.showInformationMessage(`"${node.profile.name}" now shows as "${value.trim()}".`);
+    }
+  });
+  const cmdClearAlias = vscode.commands.registerCommand("deploy.profiles.clearAlias", async (node: ProfileNode) => {
+    await config.setProfileAlias(node.profile.name, undefined);
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`Cleared display name for "${node.profile.name}".`);
+  });
+  const cmdRemoveManual = vscode.commands.registerCommand("deploy.profiles.removeManual", async (node: ProfileNode) => {
+    if (node.profile.kind !== "manual") {
+      void vscode.window.showWarningMessage("Only manual profiles can be removed. Auto profiles come from real branches.");
+      return;
+    }
+    const confirm = await vscode.window.showWarningMessage(
+      `Remove manual profile "${node.profile.name}"? This deletes its definition from settings.`,
+      { modal: true },
+      "Remove"
+    );
+    if (confirm !== "Remove") { return; }
+    await config.removeManualProfile(node.profile.name);
+    // Also clear any alias tied to it so settings don't accumulate orphans.
+    await config.setProfileAlias(node.profile.name, undefined);
+    await treeProvider.refresh();
+    void vscode.window.showInformationMessage(`Removed manual profile "${node.profile.name}".`);
+  });
   const cmdTreeHide = vscode.commands.registerCommand("deploy.profiles.hide", async (node: ProfileNode) => {
     const { toggleHidden } = await import("./core/profileGrouping");
     await config.setHiddenProfiles(toggleHidden(config.hiddenProfiles(), node.profile.name));
@@ -486,6 +524,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     deployCommand, switchCommand, treeView,
     cmdTreeDeploy, cmdTreeCancel, cmdTreeSwitch, cmdTreeHide, cmdTreeUnhide, cmdTreeAdd, cmdTreeRefresh,
+    cmdRename, cmdClearAlias, cmdRemoveManual,
     cmdCopyBranchLinks, cmdCopyMarkdown, cmdOpenBranches, cmdMassPr,
     cmdRepoCopyLink, cmdRepoOpenBranch, cmdRepoOpenPr, cmdRepoExclude, cmdRepoInclude
   );

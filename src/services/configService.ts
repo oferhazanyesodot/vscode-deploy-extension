@@ -14,6 +14,7 @@ export class ConfigService {
       hiddenProfiles: cfg.get("hiddenProfiles"),
       manualProfiles: cfg.get("manualProfiles"),
       globalExclusions: cfg.get("globalExclusions"),
+      profileAliases: cfg.get("profileAliases"),
     });
   }
 
@@ -46,6 +47,10 @@ export class ConfigService {
     return this.get().globalExclusions;
   }
 
+  profileAliases(): Record<string, string> {
+    return this.get().profileAliases;
+  }
+
   private target(): vscode.ConfigurationTarget {
     const folders = vscode.workspace.workspaceFolders;
     return folders && folders.length > 0
@@ -68,5 +73,26 @@ export class ConfigService {
     await vscode.workspace
       .getConfiguration("deploy")
       .update("globalExclusions", list, vscode.ConfigurationTarget.Global);
+  }
+
+  // Set (or clear, when alias is undefined/empty) the visual alias for a profile.
+  async setProfileAlias(name: string, alias: string | undefined): Promise<void> {
+    const current = { ...this.profileAliases() };
+    if (!alias || alias.trim() === "") {
+      delete current[name];
+    } else {
+      current[name] = alias.trim();
+    }
+    await vscode.workspace.getConfiguration("deploy").update("profileAliases", current, this.target());
+  }
+
+  // Remove a manual profile definition entirely.
+  async removeManualProfile(name: string): Promise<void> {
+    const current = { ...this.manualProfiles() };
+    if (!(name in current)) {
+      return;
+    }
+    delete current[name];
+    await vscode.workspace.getConfiguration("deploy").update("manualProfiles", current, this.target());
   }
 }
